@@ -1,0 +1,75 @@
+Read the following Instagram carousel/post record and extract semantic prompt data.
+
+Input record:
+{{HANDOFF_ROW_JSON}}
+
+Return one JSON object with exactly this shape:
+
+{
+  "post_id": "string",
+  "prompt_social_media": "instagram",
+  "content_type": "string",
+  "carrousel_title": "string or null",
+  "prompt_count_detected": 0,
+  "prompts": [
+    {
+      "prompt_carrousel_page_num": 0,
+      "prompt_title": "string or null",
+      "prompt_date": null,
+      "prompt_text_raw": "string",
+      "prompt_text_clean": "string",
+      "prompt_type": "one allowed enum value",
+      "target_engine": ["string"],
+      "output_modality": ["string"],
+      "comments": ["string"],
+      "extraction_confidence": "high|medium|low",
+      "extraction_confidence_score": 0
+    }
+  ]
+}
+
+Field rules:
+- post_id must match input
+- prompt_social_media must be "instagram"
+- content_type must match input
+- carrousel_title is the title/theme of the whole carousel, or null if unclear
+- prompt_count_detected must equal the number of extracted prompts
+- prompt_carrousel_page_num should be the starting slide number where the prompt is primarily introduced
+- prompt_title is the title of the individual prompt, or null if unclear
+- prompt_date should be null unless clearly available
+- prompt_text_raw should preserve the extracted prompt text as supported by OCR
+- prompt_text_clean should remove non-prompt framing text, CTA, branding, and obvious OCR junk where possible, while preserving meaning and placeholders
+- prompt_type must be one allowed enum value
+- target_engine defaults to ["all_models"] unless clearly specified
+- output_modality must use only allowed enum values
+- comments must contain structured tags only
+- extraction_confidence_score must be an integer from 0 to 100
+- if no valid prompt exists, return prompt_count_detected = 0 and prompts = []
+
+STRICT OUTPUT REQUIREMENTS:
+
+- Do NOT invent prompts.
+- Do NOT create philosophical or generic prompts.
+- Do NOT copy schema placeholder text.
+- Do NOT output prompts unless clearly supported by OCR text.
+
+VALIDATION RULES:
+
+- prompt_count_detected MUST equal len(prompts)
+- prompt_carrousel_page_num MUST be >= 1 and match a real slide
+- If any field cannot be reliably determined:
+  → discard the prompt
+
+EMPTY CASE RULE:
+
+If no valid prompt is found:
+{
+  "post_id": "...",
+  "prompt_social_media": "instagram",
+  "content_type": "...",
+  "carrousel_title": null,
+  "prompt_count_detected": 0,
+  "prompts": []
+}
+
+Now return the JSON object only.
