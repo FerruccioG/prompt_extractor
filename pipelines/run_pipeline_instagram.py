@@ -5,14 +5,14 @@ run_pipeline_instagram.py
 Production-grade orchestrator for the Prompt Extractor Instagram pipeline.
 
 Pipeline order:
-1. email_reader.py
-2. url_normalizer.py
-3. url_filter.py
-4. platform_splitter.py
-5. scraper_instagram.py
-6. ocr_extractor.py
-7. text_group_builder.py
-8. text_manipulator_prep.py
+1. tools/ingestion/email_reader.py
+2. tools/normalization/url_normalizer.py
+3. tools/normalization/url_filter.py
+4. tools/splitting/platform_splitter.py
+5. tools/scraping/scraper_instagram.py
+6. tools/vision/ocr_extractor.py
+7. tools/processing/text_group_builder.py
+8. tools/processing/text_manipulator_prep.py
 
 Features:
 - CLEAN / INCREMENTAL mode
@@ -22,7 +22,7 @@ Features:
 - deterministic cleanup of Instagram-specific downstream artifacts
 
 Usage:
-    python3 tools/run_pipeline_instagram.py
+    python3 pipelines/run_pipeline_instagram.py
 
 Optional environment variables:
     PIPELINE_MODE=CLEAN|INCREMENTAL
@@ -45,14 +45,14 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 TOOLS_DIR = ROOT_DIR / "tools"
 
 PIPELINE: List[str] = [
-    "email_reader.py",
-    "url_normalizer.py",
-    "url_filter.py",
-    "platform_splitter.py",
-    "scraper_instagram.py",
-    "ocr_extractor.py",
-    "text_group_builder.py",
-    "text_manipulator_prep.py",
+    "ingestion/email_reader.py",
+    "normalization/url_normalizer.py",
+    "normalization/url_filter.py",
+    "splitting/platform_splitter.py",
+    "scraping/scraper_instagram.py",
+    "vision/ocr_extractor.py",
+    "processing/text_group_builder.py",
+    "processing/text_manipulator_prep.py",
 ]
 
 REQUIRED_ENV_VARS = [
@@ -173,7 +173,7 @@ def run_stage(script_name: str) -> StageResult:
     sys.stdout.flush()
 
     return StageResult(
-        stage=script_name.replace(".py", ""),
+        stage=script_name.replace("/", "_").replace(".py", ""),
         script=str(script_path),
         returncode=process.returncode,
         duration_seconds=duration,
