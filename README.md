@@ -1,150 +1,196 @@
-# 🚀 Prompt Extractor
+# 🚀 Prompt Extractor — End-to-End AI Prompt Intelligence Pipeline (10X)
 
-## 🧠 Overview
+## 🧭 Overview
 
-Prompt Extractor is an end-to-end data pipeline designed to collect, process, and structure prompts from social media platforms.
+**Prompt Extractor** is a production-grade pipeline that converts **unstructured social content** into **structured, reusable AI prompts**.
 
-The system ingests URLs from historical email data, extracts content through scraping and OCR, applies text normalization and structuring, and loads the final dataset into MongoDB for downstream analysis or export.
+It ingests content from email-discovered URLs (e.g., Instagram), processes visual and textual data, and outputs **MongoDB-ready prompt assets**.
+
+> From noise → to signal → to structured AI intelligence.
 
 ---
 
-## 🏗️ Architecture
+## 🧱 System Architecture
 
+```text
+Email
+  ↓
+Ingestion (tools/)
+  ↓
+Normalization & Filtering
+  ↓
+Platform Splitting
+  ↓
+Scraping (Playwright)
+  ↓
+OCR (Tesseract)
+  ↓
+Text Processing
+  ↓
+Semantic Extraction (AI)
+  ↓
+Schema Validation
+  ↓
+MongoDB Storage
 ```
-EMAILS  
-↓  
-Email Reader  
-↓  
-URL Dataset  
-↓  
-URL Normalizer  
-↓  
-Scraper (HTML + Metadata)  
-↓  
-Screenshot Capture  
-↓  
-OCR Extraction  
-↓  
-Raw Text Dataset  
-↓  
-Text Cleaning & Structuring  
-↓  
-MongoDB (prompt_extract collection)  
-↓  
-Export (CSV/JSON → Excel)
+
+---
+
+## 📦 Project Structure
+
+```text
+prompt-extractor/
+├── tools/        # Execution units (single-responsibility scripts)
+├── pipelines/    # Orchestration layer
+├── schemas/      # Data contracts
+├── data/         # Pipeline state & artifacts
+├── prompts/      # AI-ready prompt intelligence
+├── config/       # Environment & runtime config
+├── logs/         # Observability layer
 ```
 
 ---
 
-## 🔧 Key Components
+## ⚙️ How It Works
 
-### 📩 Email Ingestion
-- Extracts social media URLs from filtered email history
-- Outputs structured dataset (`email_url_dataset.jsonl`)
+### 1. Pipeline Runner
 
-### 🔗 URL Normalization
-- Deduplicates and standardizes URLs
+```bash
+python pipelines/run_pipeline_instagram.py
+```
 
-### 🌐 Scraping Layer
-- Retrieves HTML and metadata
-
-### 📸 Screenshot + OCR
-- Captures visual content and extracts text
-
-### 🧹 Text Processing
-- Cleans OCR noise
-- Structures content into:
-  - Hook
-  - Body
-  - CTA
-
-### 🗄️ Data Storage
-- MongoDB (`prompt_extract` collection)
+This orchestrates all stages sequentially.
 
 ---
 
-## 📊 Data Model
+### 2. Environment Setup
+
+Create `.env` at repo root:
+
+```env
+EMAIL_ADDRESS=your_email@gmail.com
+EMAIL_APP_PASSWORD=your_app_password
+GMAIL_QUERY=in:inbox subject:prompt
+PIPELINE_MODE=CLEAN
+```
+
+---
+
+### 3. Install Dependencies
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+playwright install
+```
+
+---
+
+## 🔄 Pipeline Modes
+
+### CLEAN
+- Full rebuild
+- Clears working directories
+
+### INCREMENTAL
+- Processes only new data
+- Faster iteration
+
+---
+
+## 🧠 Core Principles
+
+- **Modularity** — each tool does one thing
+- **Determinism** — reproducible runs
+- **Transparency** — file-based state
+- **Traceability** — every stage leaves evidence
+- **Data Contracts** — enforced via schemas
+
+---
+
+## 📊 Data Flow
+
+```text
+data/raw → data/intermediate → data/instagram → data/final
+```
+
+All transformations are persisted as JSONL.
+
+---
+
+## 🧪 Debugging
+
+Run individual stages:
+
+```bash
+python tools/url_normalizer.py
+```
+
+Inspect outputs:
+
+```bash
+head data/instagram/ocr_raw.jsonl
+```
+
+Check logs:
+
+```bash
+tail logs/pipeline/*.log
+```
+
+---
+
+## 🧩 Example Output
 
 ```json
 {
-  "source": "instagram",
-  "url": "...",
-  "raw_text": "...",
-  "clean_text": "...",
-  "structure": {
-    "hook": "...",
-    "body": "...",
-    "cta": "..."
-  },
-  "timestamp": "..."
+  "prompt_text": "Write a LinkedIn post about AI trends",
+  "tags": ["ai", "linkedin", "marketing"],
+  "source": {
+    "platform": "instagram",
+    "url": "https://instagram.com/..."
+  }
 }
 ```
 
 ---
 
-## 📁 Project Structure
+## 🔐 Security
 
-```
-prompt-extractor/
-│
-├── tools/
-├── pipelines/
-├── data/
-├── configs/
-├── schemas/
-├── logs/
-├── README.md
-└── requirements.txt
-```
+- `.env` is NOT committed
+- Secrets are externalized
+- Logs must not contain sensitive data
 
 ---
 
-## ⚙️ Tech Stack
+## 🚀 Roadmap
 
-- Python 🐍
-- OCR 🧾
-- MongoDB 🍃
-- JSONL 📄
-
----
-
-## 📌 Current Status
-
-- Email ingestion: ✅  
-- URL normalization: ✅  
-- Scraping: 🔄  
-- OCR: 🔄  
-- Text structuring: ❗ Pending  
-- MongoDB loading: ❗ Pending  
+- Schema validation layer
+- Prompt scoring engine
+- RAG integration
+- Parallel execution
+- CI/CD validation
 
 ---
 
-## 🎯 Design Principles
+## 🏁 Summary
 
-- Modular pipeline
-- Idempotent processing
-- Clean data contracts
-- Separation of concerns
+Prompt Extractor is not just a scraper — it is a **data-to-intelligence pipeline**.
 
----
+It transforms:
 
-## 🔮 Future Enhancements
-
-- Multi-platform scraping
-- AI classification
-- Prompt clustering
-- Analytics dashboard
-
----
-
-## ▶️ Usage (Planned)
-
-```
-python pipelines/run_full_pipeline.py
-```
+> 📸 Visual content → 🧾 Text → 🧠 Meaning → 🧩 Structured prompts
 
 ---
 
 ## 👤 Author
 
-Ferruccio Guicciardi
+Ferruccio Guicciardi  
+AI Architect | Data Engineer | Prompt Systems Builder
+
+---
+
+## 📜 License
+
+MIT License
