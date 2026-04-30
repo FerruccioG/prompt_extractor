@@ -1,5 +1,5 @@
 # 🚀 Prompt Extractor — End-to-End AI Prompt Intelligence Pipeline (10X)
-
+![Architecture](./docs/prompt_extractor_architecture.png)
 ## 🧭 Overview
 
 **Prompt Extractor** is a production-grade pipeline that converts **unstructured social content** into **structured, reusable AI prompts**.
