@@ -3,6 +3,8 @@
 ## 🧭 Overview
 
 **Prompt Extractor** is a production-grade pipeline that converts **unstructured social content** into **structured, reusable AI prompts**.
+I have emailed to myself several social media URL that point to prompts ads and carrousels for more than two years.
+I needed a way to collect all those prompts into one single data storage.
 
 It ingests content from email-discovered URLs (e.g., Instagram), processes visual and textual data, and outputs **MongoDB-ready prompt assets**.
 
