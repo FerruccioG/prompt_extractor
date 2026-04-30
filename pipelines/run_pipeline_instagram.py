@@ -5,14 +5,14 @@ run_pipeline_instagram.py
 Production-grade orchestrator for the Prompt Extractor Instagram pipeline.
 
 Pipeline order:
-1. tools/ingestion/email_reader.py
-2. tools/normalization/url_normalizer.py
-3. tools/normalization/url_filter.py
-4. tools/splitting/platform_splitter.py
-5. tools/scraping/scraper_instagram.py
-6. tools/vision/ocr_extractor.py
-7. tools/processing/text_group_builder.py
-8. tools/processing/text_manipulator_prep.py
+1. email_reader.py
+2. url_normalizer.py
+3. url_filter.py
+4. platform_splitter.py
+5. scraper_instagram.py
+6. ocr_extractor.py
+7. text_group_builder.py
+8. text_manipulator_prep.py
 
 Features:
 - CLEAN / INCREMENTAL mode
@@ -41,18 +41,52 @@ from pathlib import Path
 from typing import List
 
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(__file__).resolve().parents[1]
 TOOLS_DIR = ROOT_DIR / "tools"
 
+
+def load_dotenv_if_present() -> None:
+    """
+    Load local .env values when present.
+
+    This keeps VM/local execution convenient while preserving portability:
+    - no secrets are hardcoded
+    - existing exported environment variables are not overwritten
+    - missing .env files are ignored
+    """
+    env_file = ROOT_DIR / ".env"
+
+    if not env_file.exists():
+        return
+
+    print(f"Loading environment variables from {env_file}")
+
+    for raw_line in env_file.read_text().splitlines():
+        line = raw_line.strip()
+
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+
+        if key:
+            os.environ.setdefault(key, value)
+
+
+load_dotenv_if_present()
+
+
 PIPELINE: List[str] = [
-    "ingestion/email_reader.py",
-    "normalization/url_normalizer.py",
-    "normalization/url_filter.py",
-    "splitting/platform_splitter.py",
-    "scraping/scraper_instagram.py",
-    "vision/ocr_extractor.py",
-    "processing/text_group_builder.py",
-    "processing/text_manipulator_prep.py",
+    "email_reader.py",
+    "url_normalizer.py",
+    "url_filter.py",
+    "platform_splitter.py",
+    "scraper_instagram.py",
+    "ocr_extractor.py",
+    "text_group_builder.py",
+    "text_manipulator_prep.py",
 ]
 
 REQUIRED_ENV_VARS = [
@@ -173,7 +207,7 @@ def run_stage(script_name: str) -> StageResult:
     sys.stdout.flush()
 
     return StageResult(
-        stage=script_name.replace("/", "_").replace(".py", ""),
+        stage=script_name.replace(".py", ""),
         script=str(script_path),
         returncode=process.returncode,
         duration_seconds=duration,
