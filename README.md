@@ -2,7 +2,7 @@
 ![Architecture](./docs/prompt_extractor_architecture.png)
 ## 🧭 Overview
 
-**Prompt Extractor** is a production-grade pipeline that converts **unstructured social content** into **structured, reusable AI prompts**.
+**Prompt Extractor** is a production-grade OpenClaw Agentic AI pipeline that converts **unstructured social content** into **structured, reusable AI prompts**.
 I have emailed to myself several social media URL that point to prompts ads and carrousels for more than two years.
 I needed a way to collect all those prompts into one single data storage.
 
