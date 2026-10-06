@@ -30,6 +30,7 @@ import shutil
 import sys
 import tempfile
 import time
+from copy import copy
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,32 @@ DEFAULT_WORKBOOK = Path(
 DEFAULT_INPUT = ROOT_DIR / "data/remote/source_records.jsonl"
 DEFAULT_SHEET = "Source Directory"
 BACKUP_DIR = ROOT_DIR / "data/remote/backups"
+
+# Golden relationship-intelligence columns. Existing workbook columns are
+# preserved; these are appended to the right only when missing.
+EXTENDED_HEADERS = [
+    "Candidate ↔ Source Relationship Score",
+    "Relationship Tier",
+    "Candidate Fit",
+    "Remote Strength",
+    "Ireland/EU Accessibility",
+    "Opportunity Density",
+    "Specialization Fit",
+    "Hidden Potential",
+    "Directness",
+    "Trust/Risk",
+    "Earning Potential",
+    "Signal Quality",
+    "Freshness/Activity",
+    "Generic Relationship Score",
+    "Verification Status",
+    "Email Evidence Count",
+    "Discovery Evidence Count",
+    "Direct Evidence URL Count",
+    "Profile Signal Groups",
+    "Representative Evidence URLs",
+    "Scoring Notes",
+]
 
 
 def now_utc_compact() -> str:
@@ -131,6 +158,25 @@ def build_header_map(ws, header_row: int) -> dict[str, int]:
         if header:
             mapping[header.casefold()] = col
     return mapping
+
+
+def ensure_extended_headers(ws, header_row: int, header_map: dict[str, int]) -> tuple[dict[str, int], list[str]]:
+    added: list[str] = []
+    last_col = ws.max_column
+    template = ws.cell(row=header_row, column=last_col) if last_col else None
+
+    for header in EXTENDED_HEADERS:
+        key = header.casefold()
+        if key in header_map:
+            continue
+        last_col += 1
+        cell = ws.cell(row=header_row, column=last_col, value=header)
+        if template is not None and template.has_style:
+            cell._style = copy(template._style)
+        header_map[key] = last_col
+        added.append(header)
+
+    return header_map, added
 
 
 def first_record_value(record: dict[str, Any], *names: str) -> Any:
@@ -264,6 +310,8 @@ def main() -> int:
     print(f"Workbook: {output}")
     print(f"Worksheet: {target_sheet}")
     print(f"Source records: {source_input}")
+    dry_run = os.getenv("REMOTE_EXCEL_DRY_RUN", "").strip().lower() in {"1", "true", "yes", "y"}
+    extend_headers = os.getenv("REMOTE_EXCEL_EXTEND_HEADERS", "1").strip().lower() not in {"0", "false", "no", "n"}
 
     wb = None
     try:
@@ -280,6 +328,14 @@ def main() -> int:
                 "nothing was written."
             )
             return 0
+
+        added_headers: list[str] = []
+        if extend_headers:
+            header_map, added_headers = ensure_extended_headers(ws, header_row, header_map)
+            if added_headers:
+                print(f"Golden columns to add: {len(added_headers)}")
+                for header in added_headers:
+                    print(f"  + {header}")
 
         index = existing_index(ws, header_row, header_map)
         appended = 0
@@ -314,7 +370,20 @@ def main() -> int:
                 if source:
                     index[f"source_url::{source}::{url}"] = new_row
 
-        if appended == 0 and updated == 0:
+        changes_required = appended > 0 or updated > 0 or bool(added_headers)
+
+        if dry_run:
+            print(
+                "DRY RUN complete: "
+                f"records={len(records)}, would_append={appended}, "
+                f"would_update={updated}, ignored={ignored}, "
+                f"cells_written={cells_written}, "
+                f"would_add_columns={len(added_headers)}"
+            )
+            print("Workbook was NOT saved.")
+            return 0
+
+        if not changes_required:
             print(
                 f"No workbook changes required. ignored={ignored}, "
                 f"records={len(records)}"
@@ -327,7 +396,8 @@ def main() -> int:
         print(
             "Excel load complete: "
             f"records={len(records)}, appended={appended}, updated={updated}, "
-            f"ignored={ignored}, cells_written={cells_written}"
+            f"ignored={ignored}, cells_written={cells_written}, "
+            f"columns_added={len(added_headers)}"
         )
         print(f"Backup: {backup}")
         return 0
