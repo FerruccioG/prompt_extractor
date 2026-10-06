@@ -9,11 +9,12 @@ Key differences from the original Instagram prompt pipeline:
 - Excel output targets the Windows AI_Remote share mounted in Ubuntu.
 - The original Prompt pipeline remains unchanged.
 
-Current stages reuse the proven extraction stack and finish with a
-non-destructive Excel Source Directory loader.
+Current stages implement Remote-specific ingestion, conservative URL
+normalization, high-recall triage, source consolidation, and a non-destructive
+Excel Source Directory loader.
 
-This is Phase 1. A later phase will replace the social-only URL filter and
-Instagram-only scraper with all-URL ingestion and a generic browser resolver.
+The generic browser resolver will be inserted after source consolidation so
+social/redirect discovery nodes can reveal their underlying durable sources.
 """
 
 from __future__ import annotations
@@ -56,13 +57,9 @@ load_dotenv_if_present()
 
 PIPELINE: List[str] = [
     "remote_email_reader.py",
-    "url_normalizer.py",
-    "url_filter.py",
-    "platform_splitter.py",
-    "scraper_instagram.py",
-    "ocr_extractor.py",
-    "text_group_builder.py",
-    "text_manipulator_prep.py",
+    "normalization/remote_url_normalizer.py",
+    "normalization/remote_url_triage.py",
+    "normalization/remote_source_consolidator.py",
     "storage/excel_source_loader.py",
 ]
 
