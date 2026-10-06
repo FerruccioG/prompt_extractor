@@ -36,6 +36,7 @@ from typing import List
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 TOOLS_DIR = ROOT_DIR / "tools"
+DEFAULT_EXCEL_OUTPUT_PATH = Path(r"O:\\AI\\Remote\\Remote_Opportunities_Master_List_Expanded_Sources.xlsx")
 
 
 def load_dotenv_if_present() -> None:
@@ -105,6 +106,12 @@ class StageResult:
 
 def now_utc_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def get_excel_output_path() -> Path:
+    """Return the Remote Opportunities Excel destination path."""
+    configured = os.getenv("REMOTE_EXCEL_OUTPUT_PATH", "").strip()
+    return Path(configured) if configured else DEFAULT_EXCEL_OUTPUT_PATH
 
 
 def get_pipeline_mode() -> str:
@@ -189,12 +196,14 @@ def main() -> int:
 
     try:
         mode = get_pipeline_mode()
+        excel_output_path = get_excel_output_path()
 
         print("Remote Opportunities pipeline started.")
         print("Gmail filter: subject:Remote")
         print(f"Root directory: {ROOT_DIR}")
         print(f"Python executable: {sys.executable}")
         print(f"Pipeline mode: {mode}")
+        print(f"Excel destination: {excel_output_path}")
         print(f"Total stages: {len(PIPELINE)}")
         print(f"Started at: {now_utc_iso()}")
         sys.stdout.flush()
@@ -225,6 +234,7 @@ def main() -> int:
                     "failed_stage": result.stage,
                     "pipeline_mode": mode,
                     "gmail_query": "subject:Remote",
+                    "excel_output_path": str(excel_output_path),
                     "cleanup": cleanup_info,
                     "total_duration_seconds": round(time.time() - overall_started, 2),
                     "stages": [asdict(r) for r in results],
@@ -236,6 +246,7 @@ def main() -> int:
             "message": "Remote pipeline completed.",
             "pipeline_mode": mode,
             "gmail_query": "subject:Remote",
+            "excel_output_path": str(excel_output_path),
             "cleanup": cleanup_info,
             "total_duration_seconds": round(time.time() - overall_started, 2),
             "stages": [asdict(r) for r in results],
