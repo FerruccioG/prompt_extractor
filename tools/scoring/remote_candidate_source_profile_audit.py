@@ -71,9 +71,18 @@ def compact(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def latest_by_source(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        source = str(row.get("source", "")).lower()
+        if source:
+            latest[source] = row
+    return list(latest.values())
+
+
 def main() -> int:
-    rows = load_jsonl(RESULTS)
-    unresolved = load_jsonl(UNRESOLVED)
+    rows = latest_by_source(load_jsonl(RESULTS))
+    unresolved = latest_by_source(load_jsonl(UNRESOLVED))
 
     zero_signal = [
         r for r in rows
