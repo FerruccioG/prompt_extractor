@@ -5,19 +5,19 @@ remote_discovery_consolidator.py
 Collapse duplicate discovery-node variants before browser resolution while
 preserving every underlying evidence relationship.
 
-Examples:
-- Multiple LinkedIn newsletter CTA variants pointing to the same article
-- The same social post discovered in several emails
-- Tracking-parameter variants of the same social content URL
+The stage is intentionally high-recall:
+- content-bearing / redirect nodes go to the resolver queue
+- obvious social-platform utility/boilerplate pages are retained separately
+  as platform evidence, never discarded
+- every original evidence row is preserved
 
-Input:
+Inputs:
 - data/remote/discovery_nodes.jsonl
 
 Outputs:
 - data/remote/discovery_nodes_consolidated.jsonl
+- data/remote/discovery_nodes_platform_evidence.jsonl
 - data/remote/discovery_node_evidence.jsonl
-
-The consolidated file is what the browser resolver should process.
 """
 
 from __future__ import annotations
@@ -41,6 +41,12 @@ OUTPUT_PATH = Path(
         ROOT_DIR / "data/remote/discovery_nodes_consolidated.jsonl",
     )
 )
+PLATFORM_EVIDENCE_PATH = Path(
+    os.getenv(
+        "REMOTE_DISCOVERY_PLATFORM_EVIDENCE",
+        ROOT_DIR / "data/remote/discovery_nodes_platform_evidence.jsonl",
+    )
+)
 EVIDENCE_PATH = Path(
     os.getenv(
         "REMOTE_DISCOVERY_NODE_EVIDENCE",
@@ -48,26 +54,47 @@ EVIDENCE_PATH = Path(
     )
 )
 
-DROP_QUERY_PREFIXES = (
-    "utm_",
-    "trk",
-)
+DROP_QUERY_PREFIXES = ("utm_", "trk")
 DROP_QUERY_NAMES = {
     "midtoken", "midsig", "eid", "lipi", "li_fat_id", "fbclid", "gclid",
     "igsh", "igshid", "mibextid", "mc_cid", "mc_eid", "si", "feature",
 }
 
 SOCIAL_BASE_DOMAINS = (
-    "instagram.com",
-    "tiktok.com",
-    "facebook.com",
-    "fb.watch",
-    "linkedin.com",
-    "youtube.com",
-    "youtu.be",
-    "x.com",
-    "twitter.com",
+    "instagram.com", "tiktok.com", "facebook.com", "fb.watch",
+    "linkedin.com", "youtube.com", "youtu.be", "x.com", "twitter.com",
     "pinterest.com",
+)
+
+# These are transport/account/navigation surfaces rather than content
+# destinations. They are preserved as platform evidence but do not justify a
+# browser visit during source discovery.
+LINKEDIN_UTILITY_PREFIXES = (
+    "/help/",
+    "/login",
+    "/uas/login",
+    "/psettings/",
+    "/mypreferences/",
+    "/comm/feed",
+    "/comm/messaging",
+    "/comm/mynetwork",
+    "/comm/notifications",
+    "/comm/jobs/alerts",
+    "/comm/psettings/",
+    "/comm/dms/",
+    "/e/v2",
+)
+
+GENERIC_UTILITY_TERMS = (
+    "/login", "/signin", "/sign-in", "/logout", "/settings", "/preferences",
+    "/privacy", "/terms", "/legal", "/help", "/support", "/account",
+    "/unsubscribe",
+)
+
+CONTENT_PATH_TERMS = (
+    "/pulse/", "/posts/", "/feed/update/", "/jobs/view/", "/job/",
+    "/jobs/", "/reel/", "/reels/", "/p/", "/video/", "/watch",
+    "/shorts/", "/status/", "/pin/",
 )
 
 
@@ -113,15 +140,12 @@ def canonical_discovery_url(url: str) -> str:
     if not host:
         return url.strip()
 
-    scheme = "https"
     path = parsed.path or "/"
     while "//" in path:
         path = path.replace("//", "/")
     if path != "/":
         path = path.rstrip("/")
 
-    # For most social content, query parameters are transport/tracking noise.
-    # YouTube watch URLs are the exception: v identifies the content.
     kept: list[tuple[str, str]] = []
     for key, value in parse_qsl(parsed.query, keep_blank_values=True):
         lower = key.lower()
@@ -134,23 +158,52 @@ def canonical_discovery_url(url: str) -> str:
         elif host in SOCIAL_BASE_DOMAINS:
             continue
         else:
-            # For non-social redirect wrappers keep unknown params because
-            # they may contain the destination identifier.
+            # Redirect wrappers may require opaque parameters to reach the
+            # underlying destination, so preserve unknown parameters.
             kept.append((key, value))
 
-    query = urlencode(kept, doseq=True)
-    return urlunparse((scheme, host, path, "", query, ""))
+    return urlunparse(("https", host, path, "", urlencode(kept, doseq=True), ""))
 
 
 def unique(values) -> list[str]:
     seen: set[str] = set()
-    out: list[str] = []
+    result: list[str] = []
     for value in values:
         text = str(value or "").strip()
         if text and text not in seen:
             seen.add(text)
-            out.append(text)
-    return out
+            result.append(text)
+    return result
+
+
+def resolution_class(url: str, node_type: str) -> tuple[str, int, str]:
+    """
+    Return (class, content_score, reason).
+
+    platform_evidence means "preserve, but don't spend a browser visit".
+    resolve means "worth attempting to resolve/render".
+    """
+    parsed = urlparse(url)
+    host = canonical_host(parsed.hostname or "")
+    path = (parsed.path or "/").lower()
+
+    if node_type == "redirect_wrapper":
+        return "resolve", 90, "redirect_wrapper_may_reveal_source"
+
+    if host == "linkedin.com" and any(path.startswith(p) for p in LINKEDIN_UTILITY_PREFIXES):
+        return "platform_evidence", 5, "linkedin_utility_or_account_surface"
+
+    if any(term in path for term in CONTENT_PATH_TERMS):
+        return "resolve", 95, "content_bearing_social_path"
+
+    if any(term in path for term in GENERIC_UTILITY_TERMS):
+        return "platform_evidence", 10, "generic_utility_or_account_surface"
+
+    if host in SOCIAL_BASE_DOMAINS:
+        # Unknown social paths are still resolved rather than discarded.
+        return "resolve", 60, "ambiguous_social_path_retained"
+
+    return "resolve", 70, "non_social_discovery_node"
 
 
 def main() -> int:
@@ -163,11 +216,11 @@ def main() -> int:
 
     for row in rows:
         raw = str(row.get("normalized_url", "")).strip()
-        if not raw:
-            continue
-        groups[canonical_discovery_url(raw)].append(row)
+        if raw:
+            groups[canonical_discovery_url(raw)].append(row)
 
-    consolidated: list[dict[str, Any]] = []
+    resolve_rows: list[dict[str, Any]] = []
+    platform_rows: list[dict[str, Any]] = []
     evidence_rows: list[dict[str, Any]] = []
 
     for canonical_url, members in groups.items():
@@ -177,6 +230,10 @@ def main() -> int:
         senders = unique(r.get("source_from") for r in members)
         original_urls = unique(r.get("normalized_url") for r in members)
         dates = sorted(unique(r.get("email_datetime") for r in members))
+        node_types = unique(r.get("discovery_node_type") for r in members)
+        node_type = node_types[0] if node_types else ""
+
+        bucket, content_score, class_reason = resolution_class(canonical_url, node_type)
 
         first = dict(members[0])
         first["normalized_url"] = canonical_url
@@ -189,11 +246,19 @@ def main() -> int:
         first["first_seen"] = dates[0] if dates else ""
         first["last_seen"] = dates[-1] if dates else ""
         first["triage_priority"] = max(priorities) if priorities else 0
-        consolidated.append(first)
+        first["resolution_class"] = bucket
+        first["content_score"] = content_score
+        first["resolution_class_reason"] = class_reason
+
+        if bucket == "platform_evidence":
+            platform_rows.append(first)
+        else:
+            resolve_rows.append(first)
 
         for member in members:
             evidence_rows.append({
                 "canonical_discovery_url": canonical_url,
+                "resolution_class": bucket,
                 "source_message_id": member.get("source_message_id"),
                 "source_subject": member.get("source_subject"),
                 "source_from": member.get("source_from"),
@@ -203,25 +268,38 @@ def main() -> int:
                 "discovery_node_type": member.get("discovery_node_type"),
             })
 
-    consolidated.sort(
+    resolve_rows.sort(
         key=lambda r: (
+            -int(r.get("content_score", 0) or 0),
             -int(r.get("email_evidence_count", 0) or 0),
             -int(r.get("evidence_variant_count", 0) or 0),
             -int(r.get("triage_priority", 0) or 0),
             str(r.get("normalized_url", "")),
         )
     )
+    platform_rows.sort(
+        key=lambda r: (
+            -int(r.get("email_evidence_count", 0) or 0),
+            -int(r.get("evidence_variant_count", 0) or 0),
+            str(r.get("normalized_url", "")),
+        )
+    )
 
-    write_jsonl(OUTPUT_PATH, consolidated)
+    write_jsonl(OUTPUT_PATH, resolve_rows)
+    write_jsonl(PLATFORM_EVIDENCE_PATH, platform_rows)
     write_jsonl(EVIDENCE_PATH, evidence_rows)
 
     print(json.dumps({
         "status": "ok",
         "input_discovery_nodes": len(rows),
-        "consolidated_discovery_nodes": len(consolidated),
-        "duplicate_variants_collapsed": len(rows) - len(consolidated),
+        "canonical_groups": len(groups),
+        "resolver_queue_nodes": len(resolve_rows),
+        "platform_evidence_nodes": len(platform_rows),
+        "duplicate_variants_collapsed": len(rows) - len(groups),
         "evidence_rows_preserved": len(evidence_rows),
+        "accounted_canonical_groups": len(resolve_rows) + len(platform_rows),
         "output": str(OUTPUT_PATH),
+        "platform_evidence_output": str(PLATFORM_EVIDENCE_PATH),
         "evidence_output": str(EVIDENCE_PATH),
     }, ensure_ascii=False))
     return 0
