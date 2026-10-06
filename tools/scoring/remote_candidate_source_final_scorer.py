@@ -75,7 +75,7 @@ REMOTE_JOB_BOARDS = {
     "jobgether.com", "weworkremotely.com", "remotive.com", "remoteok.com",
     "jobspresso.co", "justremote.co", "remotely.jobs", "remotewoman.com",
     "flexjobs.com", "remote.co", "jsremotely.com", "remotelyx.com",
-    "dynamitejobs.com", "authenticjobs.com",
+    "dynamitejobs.com", "authenticjobs.com", "remote.com",
 }
 GENERAL_JOB_PLATFORMS = {
     "indeed.com", "wellfound.com", "jobright.ai", "talent.com",
@@ -106,6 +106,7 @@ KNOWN_BAD_OR_HIJACKED = {
 }
 SPECIALIZATION_MISMATCH = {
     "careerstructure.com",
+    "eursap.eu",
 }
 
 # Strong known sources whose profile extraction may be blocked/JS-heavy.
@@ -206,6 +207,8 @@ def specialization_fit(profile: dict[str, Any], source: str) -> int:
 
     if source == "careerstructure.com":
         score = min(score, 20)
+    if source == "eursap.eu":
+        score = min(score, 35)
     if source == "job-hunt.org":
         score = min(score, 25)
     if source in CONTENT_OR_LOW_DIRECTNESS or source in KNOWN_BAD_OR_HIJACKED:
@@ -424,10 +427,36 @@ def score_row(rel: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
         final_score = 0
     if source == "careerstructure.com":
         final_score = min(final_score, 35)
+    if source == "eursap.eu":
+        final_score = min(final_score, 59)
     if source == "job-hunt.org":
         final_score = min(final_score, 45)
     if source in CONTENT_OR_LOW_DIRECTNESS:
         final_score = min(final_score, 30)
+
+    # Sanity gates: the project is specifically about useful REMOTE-source
+    # relationships for this candidate. High generic source quality must not
+    # overpower weak remote or geographic evidence.
+    if dims["Remote Strength"] < 50:
+        final_score = min(final_score, 74)
+
+    # Candidate-facing but indirect/community resources should not rank as
+    # primary monitoring channels.
+    if stype == "Community / Career Resource":
+        final_score = min(final_score, 59)
+
+    # Recruiters/job platforms with no Ireland/EU evidence remain useful, but
+    # should stay below Tier B until geography is verified.
+    if dims["Ireland/EU Accessibility"] < 30 and stype in {
+        "Recruiter / Staffing", "Job Platform", "Other Candidate Source"
+    }:
+        final_score = min(final_score, 59)
+
+    # A broad remote board with almost no demonstrated specialization fit is
+    # still useful for discovery, but should not outrank better-targeted
+    # sources.
+    if dims["Candidate Fit"] < 30 and stype == "Remote Job Board":
+        final_score = min(final_score, 59)
 
     score = clamp(final_score)
 
@@ -458,6 +487,16 @@ def score_row(rel: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
         notes.append("Indirect relationship: useful for discovery/networking more than direct applications.")
     if source == "careerstructure.com":
         notes.append("Legitimate job source but specialization is construction, materially misaligned with target profile.")
+    if source == "eursap.eu":
+        notes.append("Legitimate recruiter, but its SAP specialization is not a core match for the target profile.")
+    if dims["Remote Strength"] < 50:
+        notes.append("Remote evidence is limited; score capped below Tier A.")
+    if dims["Ireland/EU Accessibility"] < 30 and stype in {
+        "Recruiter / Staffing", "Job Platform", "Other Candidate Source"
+    }:
+        notes.append("Ireland/EU accessibility is not sufficiently evidenced; score capped below Tier B.")
+    if dims["Candidate Fit"] < 30 and stype == "Remote Job Board":
+        notes.append("Remote source is valid, but demonstrated specialization fit is weak; score capped below Tier B.")
     if source in KNOWN_BAD_OR_HIJACKED:
         notes.append("Current destination appears hijacked/unrelated; exclude.")
 
