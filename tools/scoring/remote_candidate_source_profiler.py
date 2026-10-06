@@ -227,7 +227,13 @@ def fetch_text(client: httpx.Client, url: str) -> dict[str, Any]:
 
 
 def hit_terms(text: str, terms: tuple[str, ...]) -> list[str]:
-    lower = f" {text.lower()} "
+    # Normalize URL/path punctuation so evidence such as
+    # /artificial-intelligence-jobs and /fully-remote-contract is usable even
+    # when the site blocks page text.
+    lower = text.lower()
+    lower = re.sub(r"[_\\-/?:=&.%+]+", " ", lower)
+    lower = re.sub(r"\\s+", " ", lower)
+    lower = f" {lower} "
     found: list[str] = []
     for term in terms:
         if term in lower and term not in found:
@@ -268,6 +274,17 @@ def processed_sources() -> set[str]:
     return done
 
 
+def forced_sources() -> set[str]:
+    raw = os.getenv("REMOTE_PROFILE_FORCE_SOURCES", "").strip()
+    if not raw:
+        return set()
+    return {
+        item.strip().lower()
+        for item in raw.split(",")
+        if item.strip()
+    }
+
+
 def choose_links(source_row: dict[str, Any], validation: dict[str, Any] | None) -> list[str]:
     validation = validation or {}
     links = validation.get("candidate_links", []) or []
@@ -300,10 +317,13 @@ def choose_links(source_row: dict[str, Any], validation: dict[str, Any] | None) 
 
 
 def aggregate_evidence(pages: list[dict[str, Any]]) -> dict[str, Any]:
+    # URLs are first-class evidence. This is important for JS-heavy and
+    # anti-bot sites where meaningful candidate taxonomy is visible in the
+    # path even when body text is unavailable (e.g. /data-jobs,
+    # /artificial-intelligence-jobs, /fully-remote-contract...).
     text = " ".join(
-        f"{p.get('title','')} {p.get('text','')}"
+        f"{p.get('requested_url','')} {p.get('url','')} {p.get('title','')} {p.get('text','')}"
         for p in pages
-        if p.get("ok")
     )
 
     p_hits = profile_hits(text)
@@ -327,7 +347,18 @@ def main() -> int:
     rows = eligible_rows()
     validation = validation_index()
     done = processed_sources()
-    pending = [r for r in rows if str(r.get("Source", "")).lower() not in done]
+    force = forced_sources()
+
+    if force:
+        pending = [
+            r for r in rows
+            if str(r.get("Source", "")).lower() in force
+        ]
+    else:
+        pending = [
+            r for r in rows
+            if str(r.get("Source", "")).lower() not in done
+        ]
 
     limit = max(0, int(os.getenv("REMOTE_PROFILE_LIMIT", str(DEFAULT_LIMIT))))
     batch = pending if limit == 0 else pending[:limit]
@@ -336,6 +367,7 @@ def main() -> int:
         "status": "starting",
         "eligible_relationships": len(rows),
         "already_processed": len(done),
+        "forced_sources": sorted(force),
         "pending_relationships": len(pending),
         "run_limit": limit,
         "this_run_relationships": len(batch),
@@ -376,12 +408,14 @@ def main() -> int:
             pages: list[dict[str, Any]] = []
             for url in urls[: 1 + PER_SOURCE_LINK_LIMIT]:
                 result = fetch_text(client, url)
+                result["requested_url"] = url
                 pages.append(result)
                 pages_fetched += 1
 
             good_pages = [p for p in pages if p.get("ok") and p.get("text")]
-            if good_pages:
-                evidence = aggregate_evidence(good_pages)
+            evidence_pages = [p for p in pages if p.get("ok") or p.get("requested_url")]
+            if evidence_pages:
+                evidence = aggregate_evidence(evidence_pages)
                 output = {
                     "source": source,
                     "relationship_score": row.get("Relationship Score"),
@@ -389,8 +423,19 @@ def main() -> int:
                     "verification_status": row.get("Verification Status"),
                     "pages_attempted": len(pages),
                     "pages_resolved": len(good_pages),
-                    "page_urls": [p.get("url") for p in pages if p.get("url")],
+                    "page_urls": [
+                        p.get("url") or p.get("requested_url")
+                        for p in pages
+                        if p.get("url") or p.get("requested_url")
+                    ],
                     **evidence,
+                    "blocked_or_shell_pages": sum(
+                        1 for p in pages
+                        if (
+                            "attention required" in str(p.get("title", "")).lower()
+                            or len(str(p.get("text", ""))) < 120
+                        )
+                    ),
                     "sample_titles": [p.get("title") for p in good_pages if p.get("title")][:8],
                     "profiled_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "status": "profiled",
