@@ -34,6 +34,7 @@ import time
 from copy import copy
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from openpyxl import load_workbook
 
@@ -97,6 +98,41 @@ def clean_header(value: Any) -> str:
 
 def normalized_key(value: Any) -> str:
     return clean_header(value).casefold()
+
+
+def normalized_host(value: Any) -> str:
+    raw = clean_header(value)
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+        host = (parsed.hostname or "").casefold().strip(".")
+    except Exception:
+        return ""
+    if host.startswith("www."):
+        host = host[4:]
+    aliases = {
+        "m.hays.ie": "hays.ie",
+        "onlineapi-internet.hays.com": "hays.ie",
+        "candidate-support.crossover.com": "crossover.com",
+        "apply2.computerfutures.com": "computerfutures.com",
+        "ie.gcsrecruitment.com": "gcsrecruitment.com",
+        "gcstechtalent.com": "gcsrecruitment.com",
+        "in.indeed.com": "indeed.com",
+        "uk.indeed.com": "indeed.com",
+        "in.talent.com": "talent.com",
+        "ie.neuvoo.com": "talent.com",
+        "jobs.zendesk.com": "zendesk.com",
+        "careers.microsoft.com": "microsoft.com",
+        "members.microsoft.com": "microsoft.com",
+        "careers.bunq.com": "bunq.com",
+        "press.bunq.com": "bunq.com",
+        "careers.accelerationpartners.com": "accelerationpartners.com",
+        "remotelyx-3.careers-page.com": "remotelyx.com",
+        "javascript.jobs": "jsremotely.com",
+        "diversityjobs.com": "latpro.com",
+    }
+    return aliases.get(host, host)
 
 
 def load_records(path: Path) -> list[dict[str, Any]]:
@@ -221,7 +257,10 @@ def existing_index(ws, header_row: int, header_map: dict[str, int]) -> dict[str,
             # create duplicate rows.
             index.setdefault(f"source::{source}", row)
         if url:
+            host = normalized_host(url)
             index[f"url::{url}"] = row
+            if host:
+                index.setdefault(f"host::{host}", row)
             if source:
                 index[f"source_url::{source}::{url}"] = row
 
@@ -241,6 +280,11 @@ def match_existing_row(
         row = index.get(f"url::{url}")
         if row:
             return row
+        host = normalized_host(url)
+        if host:
+            row = index.get(f"host::{host}")
+            if row:
+                return row
     if source:
         return index.get(f"source::{source}")
     return None
@@ -353,6 +397,7 @@ def main() -> int:
         ignored = 0
         cells_written = 0
         source_fallback_updates = 0
+        host_fallback_updates = 0
 
         for record in records:
             url, source = row_identity(record)
@@ -360,12 +405,16 @@ def main() -> int:
                 url and source and index.get(f"source_url::{source}::{url}")
             )
             exact_url = bool(url and index.get(f"url::{url}"))
+            host = normalized_host(url)
+            host_only = bool(host and index.get(f"host::{host}"))
             source_only = bool(source and index.get(f"source::{source}"))
 
             existing_row = match_existing_row(record, index)
 
             if existing_row is not None:
-                if source_only and not exact_source_url and not exact_url:
+                if host_only and not exact_source_url and not exact_url:
+                    host_fallback_updates += 1
+                elif source_only and not exact_source_url and not exact_url and not host_only:
                     source_fallback_updates += 1
                 written = write_record(ws, existing_row, record, header_map)
                 cells_written += written
@@ -388,6 +437,9 @@ def main() -> int:
                 index.setdefault(f"source::{source}", new_row)
             if url:
                 index[f"url::{url}"] = new_row
+                host = normalized_host(url)
+                if host:
+                    index.setdefault(f"host::{host}", new_row)
                 if source:
                     index[f"source_url::{source}::{url}"] = new_row
 
@@ -400,6 +452,7 @@ def main() -> int:
                 f"would_update={updated}, ignored={ignored}, "
                 f"cells_written={cells_written}, "
                 f"would_add_columns={len(added_headers)}, "
+                f"host_fallback_updates={host_fallback_updates}, "
                 f"source_fallback_updates={source_fallback_updates}"
             )
             print("Workbook was NOT saved.")
@@ -420,6 +473,7 @@ def main() -> int:
             f"records={len(records)}, appended={appended}, updated={updated}, "
             f"ignored={ignored}, cells_written={cells_written}, "
             f"columns_added={len(added_headers)}, "
+            f"host_fallback_updates={host_fallback_updates}, "
             f"source_fallback_updates={source_fallback_updates}"
         )
         print(f"Backup: {backup}")
