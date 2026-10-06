@@ -4,22 +4,16 @@ run_pipeline_remote.py
 
 Remote Opportunities variant of the Prompt Extractor pipeline.
 
-Key difference from the original Instagram prompt pipeline:
+Key differences from the original Instagram prompt pipeline:
 - Gmail ingestion is fixed to: subject:Remote
+- Excel output targets the Windows AI_Remote share mounted in Ubuntu.
 - The original Prompt pipeline remains unchanged.
 
-Current stages intentionally reuse the proven extraction stack:
-1. remote_email_reader.py
-2. url_normalizer.py
-3. url_filter.py
-4. platform_splitter.py
-5. scraper_instagram.py
-6. ocr_extractor.py
-7. text_group_builder.py
-8. text_manipulator_prep.py
+Current stages reuse the proven extraction stack and finish with a
+non-destructive Excel Source Directory loader.
 
-This is Phase 1. A later phase can replace the Instagram-only scraper with
-a generic browser resolver for Instagram/TikTok/Facebook/LinkedIn/web pages.
+This is Phase 1. A later phase will replace the social-only URL filter and
+Instagram-only scraper with all-URL ingestion and a generic browser resolver.
 """
 
 from __future__ import annotations
@@ -36,7 +30,9 @@ from typing import List
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 TOOLS_DIR = ROOT_DIR / "tools"
-DEFAULT_EXCEL_OUTPUT_PATH = Path(r"O:\\AI\\Remote\\Remote_Opportunities_Master_List_Expanded_Sources.xlsx")
+DEFAULT_EXCEL_OUTPUT_PATH = Path(
+    "/mnt/remote/Remote_Opportunities_Master_List_Expanded_Sources.xlsx"
+)
 
 
 def load_dotenv_if_present() -> None:
@@ -67,6 +63,7 @@ PIPELINE: List[str] = [
     "ocr_extractor.py",
     "text_group_builder.py",
     "text_manipulator_prep.py",
+    "storage/excel_source_loader.py",
 ]
 
 REQUIRED_ENV_VARS = [
@@ -125,6 +122,19 @@ def get_pipeline_mode() -> str:
 
 def preflight_check_required_env() -> list[str]:
     return [name for name in REQUIRED_ENV_VARS if not os.getenv(name, "").strip()]
+
+
+def preflight_check_excel_path(path: Path) -> str | None:
+    parent = path.parent
+    if not parent.exists():
+        return f"Excel destination directory does not exist: {parent}"
+    if not os.access(parent, os.R_OK | os.W_OK):
+        return f"Excel destination directory is not readable/writable: {parent}"
+    if not path.exists():
+        return f"Excel workbook does not exist: {path}"
+    if not os.access(path, os.R_OK | os.W_OK):
+        return f"Excel workbook is not readable/writable: {path}"
+    return None
 
 
 def clean_remote_artifacts() -> dict:
@@ -198,6 +208,9 @@ def main() -> int:
         mode = get_pipeline_mode()
         excel_output_path = get_excel_output_path()
 
+        # Make the exact path available to the Excel loader subprocess.
+        os.environ["REMOTE_EXCEL_OUTPUT_PATH"] = str(excel_output_path)
+
         print("Remote Opportunities pipeline started.")
         print("Gmail filter: subject:Remote")
         print(f"Root directory: {ROOT_DIR}")
@@ -215,6 +228,18 @@ def main() -> int:
                 "failed_stage": "preflight",
                 "error": "Missing required environment variables",
                 "missing_env": missing_env,
+                "total_duration_seconds": round(time.time() - overall_started, 2),
+                "stages": [],
+            })
+            return 1
+
+        excel_error = preflight_check_excel_path(excel_output_path)
+        if excel_error:
+            print_json_summary({
+                "status": "failed",
+                "failed_stage": "excel_preflight",
+                "error": excel_error,
+                "excel_output_path": str(excel_output_path),
                 "total_duration_seconds": round(time.time() - overall_started, 2),
                 "stages": [],
             })
