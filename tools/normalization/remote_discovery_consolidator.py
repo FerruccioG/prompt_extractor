@@ -79,7 +79,8 @@ LINKEDIN_UTILITY_PREFIXES = (
     "/comm/messaging",
     "/comm/mynetwork",
     "/comm/notifications",
-    "/comm/jobs/alerts",
+    "/comm/jobs/",
+    "/jobs/",
     "/comm/psettings/",
     "/comm/dms/",
     "/e/v2",
@@ -191,7 +192,7 @@ def resolution_class(url: str, node_type: str) -> tuple[str, int, str]:
         return "resolve", 90, "redirect_wrapper_may_reveal_source"
 
     if host == "linkedin.com" and any(path.startswith(p) for p in LINKEDIN_UTILITY_PREFIXES):
-        return "platform_evidence", 5, "linkedin_utility_or_account_surface"
+        return "platform_evidence", 5, "linkedin_platform_or_job_surface"
 
     if any(term in path for term in CONTENT_PATH_TERMS):
         return "resolve", 95, "content_bearing_social_path"
