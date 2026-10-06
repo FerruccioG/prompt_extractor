@@ -11,8 +11,9 @@ workbook.
 Design goals:
 - Preserve the existing workbook and worksheet layout.
 - Match columns by header name instead of hard-coded column positions.
-- De-duplicate primarily by URL, secondarily by Source + URL.
-- Update existing rows when a matching source already exists.
+- De-duplicate by durable source identity first, using URL as supporting evidence.
+- Match existing rows by Source + URL, URL, then Source-only fallback.
+- Update existing rows when a matching durable source already exists.
 - Append new rows for genuinely new sources.
 - Create a timestamped local backup before any workbook write.
 - Save through a temporary file and replace the workbook only after a
@@ -214,6 +215,11 @@ def existing_index(ws, header_row: int, header_map: dict[str, int]) -> dict[str,
         source = normalized_key(
             ws.cell(row=row, column=source_col).value if source_col else ""
         )
+        if source:
+            # Source Directory is a one-row-per-durable-source table. A source-
+            # only index is therefore required so canonical URL cleanup does not
+            # create duplicate rows.
+            index.setdefault(f"source::{source}", row)
         if url:
             index[f"url::{url}"] = row
             if source:
@@ -232,7 +238,11 @@ def match_existing_row(
         if row:
             return row
     if url:
-        return index.get(f"url::{url}")
+        row = index.get(f"url::{url}")
+        if row:
+            return row
+    if source:
+        return index.get(f"source::{source}")
     return None
 
 
@@ -342,11 +352,21 @@ def main() -> int:
         updated = 0
         ignored = 0
         cells_written = 0
+        source_fallback_updates = 0
 
         for record in records:
+            url, source = row_identity(record)
+            exact_source_url = bool(
+                url and source and index.get(f"source_url::{source}::{url}")
+            )
+            exact_url = bool(url and index.get(f"url::{url}"))
+            source_only = bool(source and index.get(f"source::{source}"))
+
             existing_row = match_existing_row(record, index)
 
             if existing_row is not None:
+                if source_only and not exact_source_url and not exact_url:
+                    source_fallback_updates += 1
                 written = write_record(ws, existing_row, record, header_map)
                 cells_written += written
                 if written:
@@ -364,7 +384,8 @@ def main() -> int:
                 continue
 
             appended += 1
-            url, source = row_identity(record)
+            if source:
+                index.setdefault(f"source::{source}", new_row)
             if url:
                 index[f"url::{url}"] = new_row
                 if source:
@@ -378,7 +399,8 @@ def main() -> int:
                 f"records={len(records)}, would_append={appended}, "
                 f"would_update={updated}, ignored={ignored}, "
                 f"cells_written={cells_written}, "
-                f"would_add_columns={len(added_headers)}"
+                f"would_add_columns={len(added_headers)}, "
+                f"source_fallback_updates={source_fallback_updates}"
             )
             print("Workbook was NOT saved.")
             return 0
@@ -397,7 +419,8 @@ def main() -> int:
             "Excel load complete: "
             f"records={len(records)}, appended={appended}, updated={updated}, "
             f"ignored={ignored}, cells_written={cells_written}, "
-            f"columns_added={len(added_headers)}"
+            f"columns_added={len(added_headers)}, "
+            f"source_fallback_updates={source_fallback_updates}"
         )
         print(f"Backup: {backup}")
         return 0
