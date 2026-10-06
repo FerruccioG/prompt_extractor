@@ -70,6 +70,17 @@ INFRA_EXACT = {
     "accounts.google.com",
     "media.licdn.com",
     "vercel.link",
+    "lnkd.in",
+}
+
+GENERIC_OR_NON_CANDIDATE_PLATFORMS = {
+    "bing.com",
+    "github.com",
+    "medium.com",
+}
+
+REMOTE_PRODUCT_NONEMPLOYMENT = {
+    "teamviewer.com",
 }
 
 INFRA_FRAGMENTS = {
@@ -176,7 +187,6 @@ def surface_text(row: dict[str, Any]) -> str:
         join_values(row, (
             "source_hint_urls",
             "representative_urls",
-            "discovery_evidence_urls",
         )),
     ]).lower()
 
@@ -210,13 +220,26 @@ def classify(row: dict[str, Any]) -> tuple[str, int, str]:
     if any(fragment in host for fragment in INFRA_FRAGMENTS):
         return "infrastructure_noise", 0, "advertising_tracking_or_measurement_host"
 
-    if host in KNOWN_CANDIDATE_SOURCES or root_hint in KNOWN_CANDIDATE_SOURCES:
+    if host in KNOWN_CANDIDATE_SOURCES:
         return "validation_queue", 95, "known_candidate_facing_source"
 
     if is_transport_host(host):
-        # Preserve transport hosts for parent resolution; do not waste live
-        # source-validation requests on the transport endpoint itself.
+        # Even when the parent organization is valuable (for example Hays or
+        # Crossover), the tracking/click hostname is not the durable source
+        # identity. Preserve it for parent resolution instead of validating it
+        # as a separate source.
+        if root_hint in KNOWN_CANDIDATE_SOURCES:
+            return "semantic_review", 30, "known_source_transport_requires_parent_collapse"
         return "semantic_review", 15, "transport_or_newsletter_host_requires_parent_resolution"
+
+    if root_hint in KNOWN_CANDIDATE_SOURCES:
+        return "validation_queue", 90, "known_candidate_source_subdomain"
+
+    if host in GENERIC_OR_NON_CANDIDATE_PLATFORMS:
+        return "semantic_review", 20, "generic_platform_not_candidate_source"
+
+    if host in REMOTE_PRODUCT_NONEMPLOYMENT:
+        return "semantic_review", 5, "remote_product_not_remote_work_source"
 
     if host in SOCIAL_CHROME_OR_ECOSYSTEM:
         return "semantic_review", 25, "social_platform_chrome_or_ecosystem_root"
