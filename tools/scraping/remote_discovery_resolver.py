@@ -43,7 +43,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
 INPUT_PATH = Path(
-    os.getenv("REMOTE_DISCOVERY_NODES", ROOT_DIR / "data/remote/discovery_nodes.jsonl")
+    os.getenv("REMOTE_DISCOVERY_NODES", ROOT_DIR / "data/remote/discovery_nodes_consolidated.jsonl")
 )
 RESULTS_PATH = Path(
     os.getenv(
