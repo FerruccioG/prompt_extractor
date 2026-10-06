@@ -231,7 +231,7 @@ def hit_terms(text: str, terms: tuple[str, ...]) -> list[str]:
     # /artificial-intelligence-jobs and /fully-remote-contract is usable even
     # when the site blocks page text.
     lower = text.lower()
-    lower = re.sub(r"[_\\-/?:=&.%+]+", " ", lower)
+    lower = re.sub(r"[_/?:=&.%+\\-]+", " ", lower)
     lower = re.sub(r"\\s+", " ", lower)
     lower = f" {lower} "
     found: list[str] = []
