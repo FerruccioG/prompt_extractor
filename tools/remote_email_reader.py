@@ -193,13 +193,13 @@ def main() -> int:
                 continue
 
             message_id = uid.decode(errors="replace")
-            subject = decode_mime_header(msg.get("Subject", ""))
-            from_value = decode_mime_header(msg.get("From", ""))
+            subject = decode_mime_header_safe(msg.get("Subject", ""))
+            from_value = decode_mime_header_safe(msg.get("From", ""))
             email_datetime = normalize_email_datetime(msg.get("Date", ""))
 
             message_urls: set[str] = set()
 
-            for text_part in get_text_parts(msg):
+            for text_part in get_text_parts_safe(msg):
                 for url in extract_all_urls(text_part):
                     message_urls.add(url)
 
