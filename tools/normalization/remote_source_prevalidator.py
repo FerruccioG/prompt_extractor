@@ -4,148 +4,122 @@ remote_source_prevalidator.py
 
 High-recall pre-validation for Candidate <-> Remote Source relationships.
 
-Purpose:
-- Remove obvious infrastructure/tracking/ad/consent hosts from expensive source research.
-- Separate semantically weak/ambiguous sources for later review.
-- Preserve every merged source in exactly one bucket.
+This revision deliberately separates:
+- source-surface evidence (host/URLs), which can justify validation;
+- email subject/context evidence, which is weak because every source entered
+  through a Gmail corpus already filtered by subject containing "Remote";
+- infrastructure/newsletter/CDN hosts, which must not be promoted merely
+  because they occur frequently.
 
-Input:
-- data/remote/source_candidates_merged.jsonl
+Every merged source lands in exactly one bucket:
+1. validation_queue
+2. semantic_review
+3. infrastructure_noise
 
-Outputs:
-- data/remote/source_validation_queue.jsonl
-- data/remote/source_semantic_review.jsonl
-- data/remote/source_infrastructure_noise.jsonl
-- data/remote/source_prevalidation_summary.json
-
-This stage is intentionally conservative. It does not decide final Golden Excel
-membership. It only prevents known technical noise from being mistaken for a
-remote-work source while retaining ambiguous sources for later analysis.
+Nothing is silently discarded.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
-INPUT_PATH = Path(
-    os.getenv(
-        "REMOTE_MERGED_SOURCES",
-        ROOT_DIR / "data/remote/source_candidates_merged.jsonl",
-    )
-)
-QUEUE_PATH = Path(
-    os.getenv(
-        "REMOTE_SOURCE_VALIDATION_QUEUE",
-        ROOT_DIR / "data/remote/source_validation_queue.jsonl",
-    )
-)
-REVIEW_PATH = Path(
-    os.getenv(
-        "REMOTE_SOURCE_SEMANTIC_REVIEW",
-        ROOT_DIR / "data/remote/source_semantic_review.jsonl",
-    )
-)
-NOISE_PATH = Path(
-    os.getenv(
-        "REMOTE_SOURCE_INFRASTRUCTURE_NOISE",
-        ROOT_DIR / "data/remote/source_infrastructure_noise.jsonl",
-    )
-)
-SUMMARY_PATH = Path(
-    os.getenv(
-        "REMOTE_SOURCE_PREVALIDATION_SUMMARY",
-        ROOT_DIR / "data/remote/source_prevalidation_summary.json",
-    )
-)
+INPUT_PATH = Path(os.getenv(
+    "REMOTE_MERGED_SOURCES",
+    ROOT_DIR / "data/remote/source_candidates_merged.jsonl",
+))
+QUEUE_PATH = Path(os.getenv(
+    "REMOTE_SOURCE_VALIDATION_QUEUE",
+    ROOT_DIR / "data/remote/source_validation_queue.jsonl",
+))
+REVIEW_PATH = Path(os.getenv(
+    "REMOTE_SOURCE_SEMANTIC_REVIEW",
+    ROOT_DIR / "data/remote/source_semantic_review.jsonl",
+))
+NOISE_PATH = Path(os.getenv(
+    "REMOTE_SOURCE_INFRASTRUCTURE_NOISE",
+    ROOT_DIR / "data/remote/source_infrastructure_noise.jsonl",
+))
+SUMMARY_PATH = Path(os.getenv(
+    "REMOTE_SOURCE_PREVALIDATION_SUMMARY",
+    ROOT_DIR / "data/remote/source_prevalidation_summary.json",
+))
 
-# Strong infrastructure patterns. These are safe to exclude from source
-# research because they are delivery/measurement/consent/storage systems, not
-# candidate-facing opportunity sources.
-INFRA_EXACT_OR_SUFFIX = {
-    "doubleclick.net",
-    "googlesyndication.com",
-    "googleadservices.com",
-    "google-analytics.com",
-    "googletagmanager.com",
-    "hubapi.com",
-    "awstrack.me",
-    "mailgun.org",
-    "sendgrid.net",
-    "mandrillapp.com",
+KNOWN_CANDIDATE_SOURCES = {
+    "linkedin.com", "remote.com", "jobgether.com", "crossover.com",
+    "indeed.com", "glassdoor.com", "wellfound.com", "weworkremotely.com",
+    "remotive.com", "remote.co", "remoteok.com", "workingnomads.com",
+    "flexjobs.com", "upwork.com", "contra.com", "toptal.com",
+    "braintrust.com", "arc.dev", "malt.com", "catalant.com",
+    "hays.ie", "hays.com",
 }
 
-INFRA_HOST_FRAGMENTS = {
-    "pubads.",
-    "adservice.",
-    "analytics.",
-    "pixel.",
-    "eventtracking.",
-    "trackimp.",
+INFRA_SUFFIXES = {
+    "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+    "google-analytics.com", "googletagmanager.com", "hubapi.com",
+    "awstrack.me", "mailgun.org", "sendgrid.net", "mandrillapp.com",
+    "mediaplex.com", "pippio.com",
 }
 
-CONSENT_HOSTS = {
-    "consent.youtube.com",
+INFRA_EXACT = {
     "accounts.google.com",
+    "media.licdn.com",
+    "vercel.link",
 }
 
-# Hosts whose names strongly indicate email transport/tracking. We keep a
-# special exception for known candidate-facing root domains such as remote.com.
+INFRA_FRAGMENTS = {
+    "pubads.", "adservice.", "analytics.", "pixel.", "eventtracking.",
+    "trackimp.", "imglinks.",
+}
+
 TRANSPORT_PREFIXES = (
-    "click.",
-    "tracking.",
-    "track.",
-    "email.",
-    "view.email.",
-    "pages.email.",
-    "links.",
+    "click.", "tracking.", "track.", "email.", "view.email.", "pages.email.",
+    "links.", "link.", "li.", "lm.", "ct.", "edt.", "enews.", "mailing.",
+    "r.", "nl.", "eletters.", "newsletters.", "ifwnewsletters.",
 )
 
-# Strong positive source signals. These are not final scores; they merely help
-# prioritize the validation queue.
-POSITIVE_TERMS = (
-    "job", "jobs", "career", "careers", "remote", "talent", "recruit",
-    "staffing", "contract", "freelance", "consult", "work", "hiring",
-    "opportunit", "vacanc", "apply", "employment",
+TRANSPORT_EXACT_OR_SUFFIX = {
+    "1105newsletters.com",
+    "slgnt.eu",
+    "smartbrief.com",
+    "list-manage.com",
+    "mkt3261.com",
+    "p0.com",
+}
+
+SOCIAL_CHROME_OR_ECOSYSTEM = {
+    "about.meta.com", "meta.ai", "muse.ai", "threads.com",
+}
+
+NEWS_OR_CONTENT_PUBLISHERS = {
+    "bbc.com", "reuters.com", "arstechnica.com", "darkreading.com",
+    "thehackernews.com", "bleepingcomputer.com", "theregister.com",
+    "pcmag.com", "cnet.com", "eweek.com", "techtarget.com",
+    "techrepublic.com", "computerworld.com", "infoworld.com",
+}
+
+# Strong candidate-facing terms in the actual source surface.
+STRONG_SURFACE_TERMS = (
+    "job", "jobs", "career", "careers", "recruit", "recruitment",
+    "staffing", "talent", "freelance", "contract", "hiring", "vacanc",
+    "apply", "employment", "opportunit",
 )
 
-# Terms that often mean "remote" in a non-employment sense.
+# "remote" only counts when it occurs in the host/URL itself. It is NOT
+# counted from email subject lines because the entire corpus was selected by
+# subject:Remote, which otherwise creates circular scoring.
+REMOTE_SURFACE_TERM = "remote"
+
 NEGATIVE_REMOTE_CONTEXT = (
     "remote desktop", "remote code", "remote access", "remote server",
     "remote hacking", "remotely unlocked", "ransomware", "malware",
     "exploit", "security flaw", "ssh", "protocol", "vehicle", "car",
 )
-
-KNOWN_SOURCE_ROOTS = {
-    "linkedin.com",
-    "remote.com",
-    "jobgether.com",
-    "crossover.com",
-    "hays.ie",
-    "hays.com",
-    "indeed.com",
-    "glassdoor.com",
-    "wellfound.com",
-    "weworkremotely.com",
-    "remotive.com",
-    "remote.co",
-    "remoteok.com",
-    "workingnomads.com",
-    "flexjobs.com",
-    "upwork.com",
-    "contra.com",
-    "toptal.com",
-    "braintrust.com",
-    "arc.dev",
-    "malt.com",
-    "catalant.com",
-}
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -177,26 +151,6 @@ def host_matches_suffix(host: str, suffix: str) -> bool:
     return host == suffix or host.endswith("." + suffix)
 
 
-def evidence_text(row: dict[str, Any]) -> str:
-    fields: list[str] = [
-        str(row.get("canonical_host", "")),
-        str(row.get("canonical_root_url", "")),
-    ]
-    for key in (
-        "source_hint_urls",
-        "representative_urls",
-        "discovery_evidence_urls",
-        "source_subject_examples",
-        "source_sender_examples",
-    ):
-        value = row.get(key, [])
-        if isinstance(value, list):
-            fields.extend(str(v) for v in value)
-        elif value:
-            fields.append(str(value))
-    return " ".join(fields).lower()
-
-
 def root_domain_hint(host: str) -> str:
     parts = [p for p in host.lower().split(".") if p]
     if len(parts) < 2:
@@ -204,55 +158,106 @@ def root_domain_hint(host: str) -> str:
     return ".".join(parts[-2:])
 
 
+def join_values(row: dict[str, Any], keys: tuple[str, ...]) -> str:
+    values: list[str] = []
+    for key in keys:
+        value = row.get(key, [])
+        if isinstance(value, list):
+            values.extend(str(v) for v in value)
+        elif value:
+            values.append(str(value))
+    return " ".join(values).lower()
+
+
+def surface_text(row: dict[str, Any]) -> str:
+    return " ".join([
+        str(row.get("canonical_host", "")),
+        str(row.get("canonical_root_url", "")),
+        join_values(row, (
+            "source_hint_urls",
+            "representative_urls",
+            "discovery_evidence_urls",
+        )),
+    ]).lower()
+
+
+def contextual_text(row: dict[str, Any]) -> str:
+    return join_values(row, (
+        "source_subject_examples",
+        "source_sender_examples",
+    ))
+
+
+def is_transport_host(host: str) -> bool:
+    if host.startswith(TRANSPORT_PREFIXES):
+        return True
+    return any(host_matches_suffix(host, suffix) for suffix in TRANSPORT_EXACT_OR_SUFFIX)
+
+
 def classify(row: dict[str, Any]) -> tuple[str, int, str]:
     host = str(row.get("canonical_host", "")).strip().lower()
-    text = evidence_text(row)
-
     if not host:
         return "infrastructure_noise", 0, "missing_host"
 
-    if host in CONSENT_HOSTS:
-        return "infrastructure_noise", 0, "consent_or_auth_infrastructure"
+    root_hint = root_domain_hint(host)
+    surface = surface_text(row)
+    context = contextual_text(row)
 
-    if any(host_matches_suffix(host, suffix) for suffix in INFRA_EXACT_OR_SUFFIX):
+    if host in INFRA_EXACT:
+        return "infrastructure_noise", 0, "known_infrastructure_host"
+    if any(host_matches_suffix(host, suffix) for suffix in INFRA_SUFFIXES):
         return "infrastructure_noise", 0, "advertising_tracking_or_delivery_infrastructure"
-
-    if any(fragment in host for fragment in INFRA_HOST_FRAGMENTS):
+    if any(fragment in host for fragment in INFRA_FRAGMENTS):
         return "infrastructure_noise", 0, "advertising_tracking_or_measurement_host"
 
-    root_hint = root_domain_hint(host)
-
-    # Email/click subdomains can still belong to a meaningful organization.
-    # Keep the organization when recognizable, but do not mistake the
-    # transport hostname itself for the final canonical source.
-    if host.startswith(TRANSPORT_PREFIXES):
-        if root_hint in {"remote.com", "hays.com"}:
-            return "validation_queue", 80, "known_source_via_email_transport"
-        return "semantic_review", 20, "email_or_click_transport_requires_parent_resolution"
-
-    if host in KNOWN_SOURCE_ROOTS or root_hint in KNOWN_SOURCE_ROOTS:
+    if host in KNOWN_CANDIDATE_SOURCES or root_hint in KNOWN_CANDIDATE_SOURCES:
         return "validation_queue", 95, "known_candidate_facing_source"
 
-    positive_hits = sum(1 for term in POSITIVE_TERMS if term in text)
-    negative_hits = sum(1 for term in NEGATIVE_REMOTE_CONTEXT if term in text)
+    if is_transport_host(host):
+        # Preserve transport hosts for parent resolution; do not waste live
+        # source-validation requests on the transport endpoint itself.
+        return "semantic_review", 15, "transport_or_newsletter_host_requires_parent_resolution"
+
+    if host in SOCIAL_CHROME_OR_ECOSYSTEM:
+        return "semantic_review", 25, "social_platform_chrome_or_ecosystem_root"
+
+    strong_hits = sum(1 for term in STRONG_SURFACE_TERMS if term in surface)
+    remote_on_surface = REMOTE_SURFACE_TERM in surface
+    negative_hits = sum(1 for term in NEGATIVE_REMOTE_CONTEXT if term in (surface + " " + context))
 
     direct_count = int(row.get("evidence_url_count", 0) or 0)
     discovery_count = int(row.get("discovery_resolution_evidence_count", 0) or 0)
     email_count = int(row.get("email_evidence_count", 0) or 0)
 
-    score = 35
-    score += min(25, positive_hits * 5)
-    score += min(15, email_count * 2)
-    score += min(10, direct_count // 3)
+    score = 20
+    score += min(50, strong_hits * 15)
+    score += 15 if remote_on_surface else 0
     score += min(10, discovery_count * 2)
-    score -= min(35, negative_hits * 12)
+    score += min(5, email_count // 5)
+    score -= min(45, negative_hits * 15)
     score = max(0, min(100, score))
 
-    if negative_hits >= 1 and positive_hits <= 1:
+    if negative_hits >= 1 and strong_hits == 0:
         return "semantic_review", score, "remote_likely_non_employment_context"
 
-    if positive_hits >= 1 or email_count >= 2 or direct_count >= 3 or discovery_count >= 2:
-        return "validation_queue", score, "sufficient_candidate_source_signal"
+    if host in NEWS_OR_CONTENT_PUBLISHERS or root_hint in NEWS_OR_CONTENT_PUBLISHERS:
+        if strong_hits >= 1:
+            return "validation_queue", max(score, 60), "publisher_with_explicit_candidate_surface"
+        return "semantic_review", score, "news_or_content_publisher_not_candidate_source"
+
+    # Strong source-surface evidence is sufficient for live validation.
+    if strong_hits >= 1:
+        return "validation_queue", max(score, 60), "explicit_candidate_source_surface"
+
+    # A domain whose own identity is remote-oriented is worth validating even
+    # without a jobs/careers token.
+    if remote_on_surface:
+        return "validation_queue", max(score, 55), "remote_oriented_source_surface"
+
+    # High recurrence alone is evidence of importance, not of candidate-facing
+    # usefulness. Keep it for review instead of promoting it automatically.
+    if direct_count >= 20 or discovery_count >= 10 or email_count >= 10:
+        return "semantic_review", score, "high_recurrence_but_no_candidate_surface_signal"
 
     return "semantic_review", score, "weak_or_ambiguous_source_signal"
 
@@ -282,21 +287,23 @@ def main() -> int:
             else:
                 noise.append(output)
 
-        queue.sort(
-            key=lambda r: (
-                -int(r.get("prevalidation_score", 0) or 0),
-                -int(r.get("email_evidence_count", 0) or 0),
-                -int(r.get("evidence_url_count", 0) or 0),
-                str(r.get("canonical_host", "")),
+        def evidence_total(r: dict[str, Any]) -> int:
+            return (
+                int(r.get("evidence_url_count", 0) or 0)
+                + int(r.get("discovery_resolution_evidence_count", 0) or 0)
+                + int(r.get("email_evidence_count", 0) or 0)
             )
-        )
-        review.sort(
-            key=lambda r: (
-                -int(r.get("prevalidation_score", 0) or 0),
-                -int(r.get("email_evidence_count", 0) or 0),
-                str(r.get("canonical_host", "")),
-            )
-        )
+
+        queue.sort(key=lambda r: (
+            -int(r.get("prevalidation_score", 0) or 0),
+            -evidence_total(r),
+            str(r.get("canonical_host", "")),
+        ))
+        review.sort(key=lambda r: (
+            -evidence_total(r),
+            -int(r.get("prevalidation_score", 0) or 0),
+            str(r.get("canonical_host", "")),
+        ))
         noise.sort(key=lambda r: str(r.get("canonical_host", "")))
 
         write_jsonl(QUEUE_PATH, queue)
@@ -314,13 +321,11 @@ def main() -> int:
             "semantic_review_output": str(REVIEW_PATH),
             "infrastructure_noise_output": str(NOISE_PATH),
         }
-
         SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
         SUMMARY_PATH.write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
-
         print(json.dumps(summary, ensure_ascii=False))
         return 0
 
