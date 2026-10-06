@@ -40,8 +40,14 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
+
+# Make standalone execution behave the same way as the pipeline orchestrator.
+# Existing shell/environment values still take precedence.
+load_dotenv(ROOT_DIR / ".env", override=False)
 
 from tools.ingestion.email_reader import (
     SOCIAL_DOMAINS,
