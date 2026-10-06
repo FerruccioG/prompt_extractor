@@ -4,9 +4,9 @@ remote_email_reader.py
 
 Remote Opportunities Gmail ingestion.
 
-This reader deliberately leaves the original Prompt Extractor email reader
-unchanged. It reuses the proven Gmail/IMAP helpers but changes URL discovery
-for the Remote Opportunities pipeline:
+This reader leaves the original Prompt Extractor email reader unchanged.
+It reuses the proven Gmail/IMAP helpers but changes URL discovery for the
+Remote Opportunities pipeline:
 
 - Gmail query is fixed to: subject:Remote
 - Extract ALL HTTP/HTTPS URLs, not only known social-media domains
@@ -14,7 +14,7 @@ for the Remote Opportunities pipeline:
 - Classify each URL as social or web and record the detected platform
 - Deduplicate globally before writing the downstream URL queue
 
-Outputs remain compatible with the existing pipeline:
+Outputs:
 - data/email_url_audit.jsonl
 - data/url_queue.jsonl
 
@@ -37,6 +37,8 @@ import json
 import os
 import re
 import sys
+from email.header import decode_header
+from email.message import Message
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -45,22 +47,17 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
 
-# Make standalone execution behave the same way as the pipeline orchestrator.
-# Existing shell/environment values still take precedence.
 load_dotenv(ROOT_DIR / ".env", override=False)
 
 from tools.ingestion.email_reader import (
     SOCIAL_DOMAINS,
-    decode_mime_header,
     fetch_email_by_uid,
     getenv_required,
-    get_text_parts,
     normalize_email_datetime,
     search_message_ids,
 )
 
 GMAIL_QUERY = "subject:Remote"
-
 URL_REGEX = re.compile(r"https?://[^\s<>()\"']+", re.IGNORECASE)
 
 SOCIAL_PLATFORM_DOMAINS = {
@@ -103,13 +100,59 @@ SOCIAL_PLATFORM_DOMAINS = {
 }
 
 
+def decode_bytes_safely(payload: bytes, charset: str | None) -> str:
+    """Decode malformed/legacy email payloads without aborting the scan."""
+    for candidate in (charset, "utf-8", "latin-1"):
+        if not candidate:
+            continue
+        try:
+            return payload.decode(candidate, errors="replace")
+        except (LookupError, UnicodeError):
+            continue
+    return payload.decode("utf-8", errors="replace")
+
+
+def decode_mime_header_safe(raw_value: str | None) -> str:
+    """Decode MIME headers, tolerating labels such as unknown-8bit."""
+    if not raw_value:
+        return ""
+
+    decoded_parts: list[str] = []
+    for value, encoding in decode_header(raw_value):
+        if isinstance(value, bytes):
+            decoded_parts.append(decode_bytes_safely(value, encoding))
+        else:
+            decoded_parts.append(value)
+
+    return "".join(decoded_parts)
+
+
+def get_text_parts_safe(msg: Message):
+    """Yield text/plain and text/html bodies with defensive charset decoding."""
+    if msg.is_multipart():
+        for part in msg.walk():
+            content_type = part.get_content_type()
+            disposition = str(part.get("Content-Disposition", "")).lower()
+
+            if "attachment" in disposition:
+                continue
+
+            if content_type in {"text/plain", "text/html"}:
+                payload = part.get_payload(decode=True)
+                if payload is None:
+                    continue
+                yield decode_bytes_safely(payload, part.get_content_charset())
+    else:
+        payload = msg.get_payload(decode=True)
+        if payload is not None:
+            yield decode_bytes_safely(payload, msg.get_content_charset())
+
+
 def normalize_discovered_url(raw_url: str) -> str:
     """
     Perform conservative ingestion-time cleanup only.
 
-    Full canonicalization belongs to the downstream URL normalizer. Here we
-    decode HTML entities and remove punctuation commonly captured at the end
-    of prose URLs.
+    Full canonicalization belongs to the downstream URL normalizer.
     """
     value = html.unescape(raw_url or "").strip()
     return value.rstrip(".,);]}>\"'")
@@ -154,7 +197,6 @@ def main() -> int:
     email_address = getenv_required("EMAIL_ADDRESS")
     email_app_password = getenv_required("EMAIL_APP_PASSWORD")
 
-    # Force the Remote-opportunity query for this pipeline only.
     os.environ["GMAIL_QUERY"] = GMAIL_QUERY
 
     imap_server = os.getenv("IMAP_SERVER", "imap.gmail.com").strip()
@@ -192,16 +234,24 @@ def main() -> int:
                 )
                 continue
 
-            message_id = uid.decode(errors="replace")
-            subject = decode_mime_header_safe(msg.get("Subject", ""))
-            from_value = decode_mime_header_safe(msg.get("From", ""))
-            email_datetime = normalize_email_datetime(msg.get("Date", ""))
+            try:
+                message_id = uid.decode(errors="replace")
+                subject = decode_mime_header_safe(msg.get("Subject", ""))
+                from_value = decode_mime_header_safe(msg.get("From", ""))
+                email_datetime = normalize_email_datetime(msg.get("Date", ""))
 
-            message_urls: set[str] = set()
+                message_urls: set[str] = set()
+                for text_part in get_text_parts_safe(msg):
+                    for url in extract_all_urls(text_part):
+                        message_urls.add(url)
 
-            for text_part in get_text_parts_safe(msg):
-                for url in extract_all_urls(text_part):
-                    message_urls.add(url)
+            except Exception as exc:
+                print(
+                    f"Warning: could not decode/process UID {uid!r}: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                continue
 
             if not message_urls:
                 continue
