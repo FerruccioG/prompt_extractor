@@ -92,7 +92,7 @@ PROFILE_SIGNAL_GROUPS = {
     "data_engineering_architecture": (
         "data engineer", "data engineering", "data architect",
         "data platform", "data warehouse", "data warehousing", "etl",
-        "analytics engineer", "data integration",
+        "analytics engineer", "data integration", "data jobs",
     ),
     "bi_powerbi": (
         "power bi", "business intelligence", "bi developer", "bi consultant",
@@ -105,7 +105,7 @@ PROFILE_SIGNAL_GROUPS = {
     ),
     "cloud_azure": (
         "azure", "azure data factory", "synapse", "cloud architect",
-        "cloud engineer", "aws", "gcp",
+        "cloud engineer", "cloud jobs", "aws", "gcp",
     ),
     "financial_services": (
         "financial services", "banking", "investment bank", "capital markets",
