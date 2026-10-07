@@ -95,10 +95,21 @@ def classify(row: dict[str, Any]) -> tuple[str, list[str]]:
 
     reasons: list[str] = []
 
-    # Strong A-tier sources with solid remote and geographic evidence can be
-    # promoted immediately.
-    if tier == "A" and score >= 75 and remote >= 70 and geo >= 60 and fit >= 50:
-        reasons.append("A-tier with strong remote, geography, and candidate-fit evidence")
+    # Strong A-tier sources can be promoted immediately when their core
+    # candidate, remote, geography, density and signal dimensions all clear
+    # conservative evidence floors.  This avoids requiring the much stronger
+    # 70/60 remote/geography pair when targeted verification has already
+    # produced solid evidence (for example Built In).
+    if (
+        tier == "A"
+        and score >= 75
+        and fit >= 50
+        and remote >= 50
+        and geo >= 30
+        and density >= 60
+        and signal >= 40
+    ):
+        reasons.append("A-tier with strong core evidence across fit, remote, geography, density, and signal quality")
         return "promote_now", reasons
 
     # B/C sources can still promote now if all core dimensions clear a more
