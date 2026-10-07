@@ -17,18 +17,37 @@ This is read-only with respect to the Golden workbook and baseline JSONL.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
-BASELINE_PATH = ROOT_DIR / "data/remote/source_records.jsonl"
-RECALL_PATH = ROOT_DIR / "data/remote/recall_p1_source_records.jsonl"
-EXCLUDED_PATH = ROOT_DIR / "data/remote/recall_p1_source_records_excluded.jsonl"
+BASELINE_PATH = Path(os.getenv(
+    "REMOTE_RECALL_BASELINE_RECORDS",
+    ROOT_DIR / "data/remote/source_records.jsonl",
+))
+RECALL_PATH = Path(os.getenv(
+    "REMOTE_RECALL_SCORED_RECORDS",
+    ROOT_DIR / "data/remote/recall_p1_source_records.jsonl",
+))
+EXCLUDED_PATH = Path(os.getenv(
+    "REMOTE_RECALL_EXCLUDED_RECORDS",
+    ROOT_DIR / "data/remote/recall_p1_source_records_excluded.jsonl",
+))
 
-COMPARISON_PATH = ROOT_DIR / "data/remote/recall_p1_comparison.jsonl"
-PROMOTION_PATH = ROOT_DIR / "data/remote/recall_p1_promotion_candidates.jsonl"
-SUMMARY_PATH = ROOT_DIR / "data/remote/recall_p1_comparison_summary.json"
+COMPARISON_PATH = Path(os.getenv(
+    "REMOTE_RECALL_COMPARISON_OUTPUT",
+    ROOT_DIR / "data/remote/recall_p1_comparison.jsonl",
+))
+PROMOTION_PATH = Path(os.getenv(
+    "REMOTE_RECALL_PROMOTION_OUTPUT",
+    ROOT_DIR / "data/remote/recall_p1_promotion_candidates.jsonl",
+))
+SUMMARY_PATH = Path(os.getenv(
+    "REMOTE_RECALL_COMPARISON_SUMMARY",
+    ROOT_DIR / "data/remote/recall_p1_comparison_summary.json",
+))
 
 KEY_DIMS = (
     "Candidate ↔ Source Relationship Score",
