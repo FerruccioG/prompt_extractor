@@ -76,13 +76,16 @@ REMOTE_JOB_BOARDS = {
     "jobspresso.co", "justremote.co", "remotely.jobs", "remotewoman.com",
     "flexjobs.com", "remote.co", "jsremotely.com", "remotelyx.com",
     "dynamitejobs.com", "authenticjobs.com", "remote.com",
+    "jobicy.com", "himalayas.app", "workingnomads.com", "openjobseu.com",
 }
 GENERAL_JOB_PLATFORMS = {
     "indeed.com", "wellfound.com", "jobright.ai", "talent.com",
     "landing.jobs", "theaijobboard.com", "latpro.com",
+    "linkedin.com", "builtin.com", "ycombinator.com", "dice.com",
 }
 MARKETPLACES = {
     "upwork.com", "freelancer.com", "arc.dev", "toptal.com",
+    "a.team", "braintrust.com", "catalant.com", "contra.com", "malt.com",
 }
 RECRUITERS = {
     "hays.ie", "computerfutures.com", "gcsrecruitment.com",
@@ -99,7 +102,7 @@ COMMUNITIES_OR_ADVICE = {
 }
 CONTENT_OR_LOW_DIRECTNESS = {
     "timesofindia.indiatimes.com", "blog.yelp.com", "gartner.com",
-    "snacknation.com", "detect.fyi",
+    "snacknation.com", "detect.fyi", "udemy.com",
 }
 KNOWN_BAD_OR_HIJACKED = {
     "remotecircle.com",
@@ -114,6 +117,7 @@ KNOWN_HIGH_VALUE_WITH_WEAK_PROFILE = {
     "crossover.com", "flexjobs.com", "remote.co", "computerfutures.com",
     "gcsrecruitment.com", "toptal.com", "upwork.com", "weworkremotely.com",
     "theaijobboard.com", "indeed.com",
+    "openjobseu.com", "malt.com",
 }
 
 GROUP_WEIGHTS = {
