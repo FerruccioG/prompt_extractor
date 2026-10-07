@@ -205,7 +205,7 @@ def main() -> int:
         if v is None:
             missing.append(key)
 
-        bucket, reason = classify(row, v)
+        bucket, reason = classify(row, v, baseline)
         out = dict(row)
         out["p3_batch01_gate_bucket"] = bucket
         out["p3_batch01_gate_reason"] = reason
