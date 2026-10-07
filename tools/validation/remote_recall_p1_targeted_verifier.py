@@ -93,6 +93,16 @@ TARGET_URLS: dict[str, list[str]] = {
         "https://www.malt.com/",
         "https://www.malt.com/c/freelancers",
     ],
+    "red-gate.com": [
+        "https://www.red-gate.com/",
+        "https://www.red-gate.com/careers/",
+        "https://www.red-gate.com/careers/vacancies/",
+    ],
+    "bunq.com": [
+        "https://www.bunq.com/",
+        "https://careers.bunq.com/",
+        "https://careers.bunq.com/jobs",
+    ],
 }
 
 REMOTE_TERMS = (
