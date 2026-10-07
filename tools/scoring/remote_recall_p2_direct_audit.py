@@ -85,6 +85,12 @@ def classify(row: dict[str, Any]) -> tuple[str, str]:
     v = row.get("p2_validation", {}) or {}
     final_host = host_of(str(v.get("final_url", "") or ""))
 
+    # HubSpot hosted pages are transport/landing infrastructure, not durable
+    # Candidate <-> Source identities.  Keep them out of targeted profiling
+    # even when the hosted page exposes many candidate-looking links.
+    if host == "hs-sites.com" or host.endswith(".hs-sites.com"):
+        return "reject", "hubspot_hosted_landing_infrastructure_not_durable_source"
+
     if host in DIRECT_TARGETS:
         return "targeted_profile", DIRECT_TARGETS[host]
     if final_host in DIRECT_TARGETS:
