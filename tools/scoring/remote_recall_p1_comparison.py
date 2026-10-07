@@ -31,6 +31,10 @@ RECALL_PATH = Path(os.getenv(
     "REMOTE_RECALL_SCORED_RECORDS",
     ROOT_DIR / "data/remote/recall_p1_source_records.jsonl",
 ))
+REVIEW_PATH = Path(os.getenv(
+    "REMOTE_RECALL_REVIEW_RECORDS",
+    ROOT_DIR / "data/remote/recall_p1_source_records_review.jsonl",
+))
 EXCLUDED_PATH = Path(os.getenv(
     "REMOTE_RECALL_EXCLUDED_RECORDS",
     ROOT_DIR / "data/remote/recall_p1_source_records_excluded.jsonl",
@@ -126,6 +130,7 @@ def baseline_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def main() -> int:
     baseline = load_jsonl(BASELINE_PATH)
     recall = load_jsonl(RECALL_PATH)
+    review = load_jsonl(REVIEW_PATH)
     excluded = load_jsonl(EXCLUDED_PATH)
 
     baseline_sources = {str(r.get("Source", "")).lower() for r in baseline}
@@ -134,7 +139,7 @@ def main() -> int:
     comparison: list[dict[str, Any]] = []
     promotions: list[dict[str, Any]] = []
 
-    for row in recall:
+    for row in recall + review:
         source = str(row.get("Source", "")).lower()
         tier = str(row.get("Relationship Tier", ""))
         relationship_score = score(row)
@@ -187,6 +192,7 @@ def main() -> int:
         "status": "ok",
         "golden_baseline": stats,
         "recall_included_scored": len(recall),
+        "recall_review_scored": len(review),
         "recall_excluded_scored": len(excluded),
         "promotion_candidates": len(promotions),
         "promotion_by_tier": {
