@@ -28,22 +28,50 @@ Outputs:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
-QUEUE_PATH = ROOT_DIR / "data/remote/recall_p3_validation_batch_01.jsonl"
-RESULTS_PATH = ROOT_DIR / "data/remote/recall_p3_batch01_validation_results.jsonl"
-UNRESOLVED_PATH = ROOT_DIR / "data/remote/recall_p3_batch01_validation_unresolved.jsonl"
-BASELINE_PATH = ROOT_DIR / "data/remote/source_records_recall_p1_expanded.jsonl"
+QUEUE_PATH = Path(os.getenv(
+    "REMOTE_RECALL_P3_QUEUE",
+    ROOT_DIR / "data/remote/recall_p3_validation_batch_01.jsonl",
+))
+RESULTS_PATH = Path(os.getenv(
+    "REMOTE_RECALL_P3_VALIDATION_RESULTS",
+    ROOT_DIR / "data/remote/recall_p3_batch01_validation_results.jsonl",
+))
+UNRESOLVED_PATH = Path(os.getenv(
+    "REMOTE_RECALL_P3_VALIDATION_UNRESOLVED",
+    ROOT_DIR / "data/remote/recall_p3_batch01_validation_unresolved.jsonl",
+))
+BASELINE_PATH = Path(os.getenv(
+    "REMOTE_RECALL_P3_BASELINE",
+    ROOT_DIR / "data/remote/source_records_recall_p1_expanded.jsonl",
+))
 
-TARGET_PATH = ROOT_DIR / "data/remote/recall_p3_batch01_targeted_review.jsonl"
-INDIRECT_PATH = ROOT_DIR / "data/remote/recall_p3_batch01_indirect_keep.jsonl"
-OVERLAP_PATH = ROOT_DIR / "data/remote/recall_p3_batch01_baseline_overlap.jsonl"
-REJECT_PATH = ROOT_DIR / "data/remote/recall_p3_batch01_rejected_or_deferred.jsonl"
-SUMMARY_PATH = ROOT_DIR / "data/remote/recall_p3_batch01_gate_summary.json"
+TARGET_PATH = Path(os.getenv(
+    "REMOTE_RECALL_P3_TARGETED_OUTPUT",
+    ROOT_DIR / "data/remote/recall_p3_batch01_targeted_review.jsonl",
+))
+INDIRECT_PATH = Path(os.getenv(
+    "REMOTE_RECALL_P3_INDIRECT_OUTPUT",
+    ROOT_DIR / "data/remote/recall_p3_batch01_indirect_keep.jsonl",
+))
+OVERLAP_PATH = Path(os.getenv(
+    "REMOTE_RECALL_P3_OVERLAP_OUTPUT",
+    ROOT_DIR / "data/remote/recall_p3_batch01_baseline_overlap.jsonl",
+))
+REJECT_PATH = Path(os.getenv(
+    "REMOTE_RECALL_P3_REJECT_OUTPUT",
+    ROOT_DIR / "data/remote/recall_p3_batch01_rejected_or_deferred.jsonl",
+))
+SUMMARY_PATH = Path(os.getenv(
+    "REMOTE_RECALL_P3_SUMMARY",
+    ROOT_DIR / "data/remote/recall_p3_batch01_gate_summary.json",
+))
 
 # Plausible durable candidate/company/recruitment relationships in this batch.
 # Inclusion here means "review more deeply", never automatic promotion.
@@ -107,11 +135,22 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+HOST_ALIASES = {
+    "careers.microsoft.com": "microsoft.com",
+    "members.microsoft.com": "microsoft.com",
+    "careers.bunq.com": "bunq.com",
+    "press.bunq.com": "bunq.com",
+    "api.hireez.com": "hireez.com",
+}
+
+
 def host_of(value: str) -> str:
     try:
         parsed = urlparse(value if "://" in value else f"https://{value}")
         host = (parsed.hostname or "").lower().strip(".")
-        return host[4:] if host.startswith("www.") else host
+        if host.startswith("www."):
+            host = host[4:]
+        return HOST_ALIASES.get(host, host)
     except Exception:
         return ""
 
@@ -120,7 +159,8 @@ def validation_index() -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for path in (RESULTS_PATH, UNRESOLVED_PATH):
         for row in load_jsonl(path):
-            key = str(row.get("validation_key", "") or row.get("canonical_host", "")).lower()
+            raw_key = str(row.get("validation_key", "") or row.get("canonical_host", ""))
+            key = host_of(raw_key)
             if key:
                 out[key] = row
     return out
@@ -145,7 +185,7 @@ def infra(host: str) -> bool:
 
 
 def classify(row: dict[str, Any], v: dict[str, Any] | None, baseline: set[str]) -> tuple[str, str]:
-    original = str(row.get("canonical_host", "")).lower()
+    original = host_of(str(row.get("canonical_host", "")))
     v = v or {}
     final_host = host_of(str(v.get("final_url", "") or ""))
     resolved = bool(v.get("resolved"))
@@ -200,7 +240,7 @@ def main() -> int:
     missing: list[str] = []
 
     for row in queue:
-        key = str(row.get("canonical_host", "")).lower()
+        key = host_of(str(row.get("canonical_host", "")))
         v = validation.get(key)
         if v is None:
             missing.append(key)
