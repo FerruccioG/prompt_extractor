@@ -16,15 +16,28 @@ during targeted verification. It does not modify Golden baseline files.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
-PROFILE_PATH = ROOT_DIR / "data/remote/recall_p1_candidate_profiles.jsonl"
-TARGETED_RESULTS_PATH = ROOT_DIR / "data/remote/recall_p1_targeted_verification_results.jsonl"
-TARGETED_UNRESOLVED_PATH = ROOT_DIR / "data/remote/recall_p1_targeted_verification_unresolved.jsonl"
-OUTPUT_PATH = ROOT_DIR / "data/remote/recall_p1_candidate_profiles_refreshed.jsonl"
+PROFILE_PATH = Path(os.getenv(
+    "REMOTE_RECALL_PROFILE_INPUT",
+    ROOT_DIR / "data/remote/recall_p1_candidate_profiles.jsonl",
+))
+TARGETED_RESULTS_PATH = Path(os.getenv(
+    "REMOTE_RECALL_TARGETED_RESULTS",
+    ROOT_DIR / "data/remote/recall_p1_targeted_verification_results.jsonl",
+))
+TARGETED_UNRESOLVED_PATH = Path(os.getenv(
+    "REMOTE_RECALL_TARGETED_UNRESOLVED",
+    ROOT_DIR / "data/remote/recall_p1_targeted_verification_unresolved.jsonl",
+))
+OUTPUT_PATH = Path(os.getenv(
+    "REMOTE_RECALL_PROFILE_REFRESHED_OUTPUT",
+    ROOT_DIR / "data/remote/recall_p1_candidate_profiles_refreshed.jsonl",
+))
 
 GROUP_TERMS = {
     "ai_agentic": (
