@@ -21,18 +21,37 @@ No Golden files are modified.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
-INPUT_PATH = ROOT_DIR / "data/remote/recall_p1_promotion_candidates.jsonl"
-BASELINE_PATH = ROOT_DIR / "data/remote/source_records.jsonl"
+INPUT_PATH = Path(os.getenv(
+    "REMOTE_RECALL_PROMOTION_INPUT",
+    ROOT_DIR / "data/remote/recall_p1_promotion_candidates.jsonl",
+))
+BASELINE_PATH = Path(os.getenv(
+    "REMOTE_RECALL_BASELINE_RECORDS",
+    ROOT_DIR / "data/remote/source_records.jsonl",
+))
 
-PROMOTE_PATH = ROOT_DIR / "data/remote/recall_p1_promote_now.jsonl"
-VERIFY_PATH = ROOT_DIR / "data/remote/recall_p1_targeted_verification.jsonl"
-HOLD_PATH = ROOT_DIR / "data/remote/recall_p1_hold.jsonl"
-SUMMARY_PATH = ROOT_DIR / "data/remote/recall_p1_promotion_audit_summary.json"
+PROMOTE_PATH = Path(os.getenv(
+    "REMOTE_RECALL_PROMOTE_NOW_OUTPUT",
+    ROOT_DIR / "data/remote/recall_p1_promote_now.jsonl",
+))
+VERIFY_PATH = Path(os.getenv(
+    "REMOTE_RECALL_TARGETED_VERIFICATION_OUTPUT",
+    ROOT_DIR / "data/remote/recall_p1_targeted_verification.jsonl",
+))
+HOLD_PATH = Path(os.getenv(
+    "REMOTE_RECALL_HOLD_OUTPUT",
+    ROOT_DIR / "data/remote/recall_p1_hold.jsonl",
+))
+SUMMARY_PATH = Path(os.getenv(
+    "REMOTE_RECALL_PROMOTION_AUDIT_SUMMARY",
+    ROOT_DIR / "data/remote/recall_p1_promotion_audit_summary.json",
+))
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
