@@ -33,9 +33,20 @@ DOMAIN_RE = re.compile(
 KNOWN_NAMED_SOURCES = {
     "wellfound": "https://wellfound.com/",
     "we work remotely": "https://weworkremotely.com/",
+    "weworkremotely": "https://weworkremotely.com/",
     "remoteok": "https://remoteok.com/",
     "remote ok": "https://remoteok.com/",
     "himalayas": "https://himalayas.app/",
+    "built in": "https://builtin.com/",
+    "glassdoor": "https://glassdoor.com/",
+    "zip recruiter": "https://ziprecruiter.com/",
+    "ziprecruiter": "https://ziprecruiter.com/",
+    "indeed": "https://indeed.com/",
+    "linkedin": "https://linkedin.com/",
+}
+
+UNRESOLVED_NAMED_SOURCES = {
+    "careerhound": "Careerhound",
 }
 
 # OCR variants that are plausible but MUST be verified before canonical use.
@@ -116,6 +127,7 @@ def main() -> int:
     run_dir = args.run_dir.resolve() if args.run_dir else latest_run_dir(root)
     instagram_dir = run_dir / "harvest" / "instagram"
     ocr_path = instagram_dir / "ocr_raw.jsonl"
+    deep_ocr_path = instagram_dir / "reel_frame_ocr.jsonl"
     results_path = instagram_dir / "results.jsonl"
 
     if not ocr_path.exists():
@@ -124,11 +136,16 @@ def main() -> int:
         raise RuntimeError(f"Instagram results not found: {results_path}")
 
     ocr_rows = [r for r in read_jsonl(ocr_path) if not r.get("event")]
+    deep_ocr_rows = read_jsonl(deep_ocr_path) if deep_ocr_path.exists() else []
     result_rows = read_jsonl(results_path)
 
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in ocr_rows:
         grouped[row.get("post_id", "")].append(row)
+
+    deep_grouped: dict[str, list[dict]] = defaultdict(list)
+    for row in deep_ocr_rows:
+        deep_grouped[row.get("post_id", "")].append(row)
 
     result_by_id = {}
     for row in result_rows:
@@ -216,6 +233,59 @@ def main() -> int:
             })
             explicit_found = True
 
+        # If deeper reel OCR exists, use it to resolve source names that were
+        # absent from the first screenshot.
+        deep_rows = sorted(
+            deep_grouped.get(post_id, []),
+            key=lambda r: r.get("frame_index", 0),
+        )
+        if deep_rows:
+            deep_text = "\n".join((r.get("ocr_text_raw") or "") for r in deep_rows)
+            deep_lower = deep_text.lower()
+
+            for label, canonical_url in KNOWN_NAMED_SOURCES.items():
+                if label not in deep_lower:
+                    continue
+                domain = (urlparse(canonical_url).hostname or "").removeprefix("www.")
+                key = (post_id, domain)
+                if key in seen_candidates:
+                    continue
+                seen_candidates.add(key)
+                evidence_rows.append({
+                    "post_id": post_id,
+                    "instagram_url": source_url,
+                    "content_type": content_type,
+                    "evidence_type": "named_remote_source_deep_reel",
+                    "ocr_observed": label,
+                    "candidate_domain": domain,
+                    "candidate_url": canonical_url,
+                    "confidence": "medium",
+                    "status": "needs_validation",
+                })
+                explicit_found = True
+
+            for label, display_name in UNRESOLVED_NAMED_SOURCES.items():
+                if label not in deep_lower:
+                    continue
+                key = (post_id, f"unresolved:{label}")
+                if key in seen_candidates:
+                    continue
+                seen_candidates.add(key)
+                evidence_rows.append({
+                    "post_id": post_id,
+                    "instagram_url": source_url,
+                    "content_type": content_type,
+                    "evidence_type": "named_source_needs_resolution",
+                    "ocr_observed": label,
+                    "candidate_name": display_name,
+                    "candidate_domain": None,
+                    "candidate_url": None,
+                    "confidence": "low",
+                    "status": "needs_resolution",
+                    "note": "Source name is visible in deep reel OCR but the canonical domain was not inferred.",
+                })
+                explicit_found = True
+
         # A reel can advertise a list/resource while the single screenshot does
         # not expose the actual names. Those need richer video/frame extraction.
         list_signal = any(
@@ -232,7 +302,11 @@ def main() -> int:
                 "post_id": post_id,
                 "instagram_url": source_url,
                 "content_type": content_type,
-                "reason": "single_reel_screenshot_did_not_expose_candidate_sources",
+                "reason": (
+                    "deep_reel_frames_still_did_not_expose_resolvable_candidate_sources"
+                    if deep_rows
+                    else "single_reel_screenshot_did_not_expose_candidate_sources"
+                ),
                 "status": "needs_deeper_harvest",
             })
 
