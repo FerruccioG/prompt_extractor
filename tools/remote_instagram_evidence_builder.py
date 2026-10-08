@@ -41,6 +41,7 @@ KNOWN_NAMED_SOURCES = {
     "glassdoor": "https://glassdoor.com/",
     "zip recruiter": "https://ziprecruiter.com/",
     "ziprecruiter": "https://ziprecruiter.com/",
+    "zip reeruiter": "https://ziprecruiter.com/",
     "indeed": "https://indeed.com/",
     "linkedin": "https://linkedin.com/",
 }
@@ -115,6 +116,20 @@ def normalized_domain(value: str) -> str:
 
 def canonical_from_domain(domain: str) -> str:
     return f"https://{domain}/"
+
+
+def named_source_is_negative_context(label: str, text: str) -> bool:
+    """
+    Prevent a merely mentioned/contrasted platform from satisfying discovery.
+
+    Example: a reel saying "Find jobs not on LinkedIn" is evidence that LinkedIn
+    is NOT the hidden resource being recommended by that reel.
+    """
+    if label == "linkedin":
+        normalized = " ".join(text.lower().replace(",", " ").split())
+        if re.search(r"\bnot\s+on\s+linkedin\b", normalized):
+            return True
+    return False
 
 
 def main() -> int:
@@ -215,6 +230,8 @@ def main() -> int:
         for label, canonical_url in KNOWN_NAMED_SOURCES.items():
             if label not in lower_text:
                 continue
+            if named_source_is_negative_context(label, lower_text):
+                continue
             domain = (urlparse(canonical_url).hostname or "").removeprefix("www.")
             key = (post_id, domain)
             if key in seen_candidates:
@@ -245,6 +262,8 @@ def main() -> int:
 
             for label, canonical_url in KNOWN_NAMED_SOURCES.items():
                 if label not in deep_lower:
+                    continue
+                if named_source_is_negative_context(label, deep_lower):
                     continue
                 domain = (urlparse(canonical_url).hostname or "").removeprefix("www.")
                 key = (post_id, domain)
