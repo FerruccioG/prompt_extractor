@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -85,25 +86,57 @@ def capture_visible_content(page) -> bytes:
 
 def try_start_video(page) -> str:
     """
-    Instagram reels usually autoplay. If not, try a few conservative clicks.
-    Failure is non-fatal because sampling can still reveal a useful poster frame.
+    Start/resume the actual HTML5 video without blindly clicking it.
+
+    Clicking an already-autoplaying reel can PAUSE it. We first inspect the
+    video state; only paused/ended video elements receive an explicit play()
+    request. If Instagram exposes no video element, sampling still continues
+    and the result is preserved for later fallback handling.
     """
     selectors = [
         "article video",
         "main video",
         "video",
-        "article",
     ]
+
     for selector in selectors:
         try:
             locator = page.locator(selector).first
-            if locator.count() > 0:
-                locator.click(timeout=2000, position={"x": 20, "y": 20})
-                page.wait_for_timeout(700)
-                return selector
+            if locator.count() == 0:
+                continue
+
+            state = locator.evaluate(
+                """el => ({
+                    paused: !!el.paused,
+                    ended: !!el.ended,
+                    currentTime: Number(el.currentTime || 0),
+                    duration: Number.isFinite(el.duration) ? Number(el.duration) : null,
+                    readyState: Number(el.readyState || 0)
+                })"""
+            )
+
+            if state.get("paused") or state.get("ended"):
+                locator.evaluate(
+                    """el => {
+                        el.muted = true;
+                        if (el.ended) {
+                            try { el.currentTime = 0; } catch (e) {}
+                        }
+                        const p = el.play();
+                        if (p && typeof p.catch === 'function') {
+                            p.catch(() => {});
+                        }
+                    }"""
+                )
+                page.wait_for_timeout(900)
+                return f"play_requested:{selector}"
+
+            return f"already_playing:{selector}"
+
         except Exception:
             continue
-    return "not_started_explicitly"
+
+    return "video_element_not_found"
 
 
 def main() -> int:
@@ -126,7 +159,13 @@ def main() -> int:
         if "/reel/" in (row.get("instagram_url") or "")
     ]
 
+    # This stage is rerunnable. Rebuild its own artifacts so stale frames or
+    # duplicate result rows cannot survive a retry.
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    if results_path.exists():
+        results_path.unlink()
 
     print("REMOTE INSTAGRAM DEEP REEL HARVEST")
     print("=" * 58)
@@ -200,6 +239,7 @@ def main() -> int:
                     "processed_at": datetime.now(UTC).isoformat(),
                 })
 
+                print(f"    start action:  {start_action}")
                 print(f"    unique frames: {len(saved_paths)}")
 
             except Exception as exc:
