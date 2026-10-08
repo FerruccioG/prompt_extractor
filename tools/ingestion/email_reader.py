@@ -49,6 +49,7 @@ SOCIAL_DOMAINS = {
     "tiktok.com",
     "www.tiktok.com",
     "m.tiktok.com",
+    "vm.tiktok.com",
     "facebook.com",
     "www.facebook.com",
     "m.facebook.com",
