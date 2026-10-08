@@ -96,7 +96,7 @@ RECRUITERS = {
 }
 EMPLOYER_CAREERS = {
     "microsoft.com", "zendesk.com", "bunq.com", "accelerationpartners.com",
-    "red-gate.com",
+    "red-gate.com", "replit.com",
 }
 COMMUNITIES_OR_ADVICE = {
     "growremote.ie", "job-hunt.org", "linkedintalentconnect.com",
