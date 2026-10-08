@@ -70,6 +70,7 @@ SOCIAL_PLATFORM_DOMAINS = {
         "tiktok.com",
         "www.tiktok.com",
         "m.tiktok.com",
+        "vm.tiktok.com",
     },
     "facebook": {
         "facebook.com",
