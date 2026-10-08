@@ -23,6 +23,10 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT_DIR))
 
 from tools.scraping import scraper_instagram as instagram
 
@@ -62,7 +66,7 @@ def configure_run_paths(run_dir: Path) -> dict[str, Path]:
 
 
 def main() -> int:
-    root = Path(__file__).resolve().parents[1]
+    root = ROOT_DIR
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
