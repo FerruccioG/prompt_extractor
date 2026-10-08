@@ -82,6 +82,7 @@ GENERAL_JOB_PLATFORMS = {
     "indeed.com", "wellfound.com", "jobright.ai", "talent.com",
     "landing.jobs", "theaijobboard.com", "latpro.com",
     "linkedin.com", "builtin.com", "ycombinator.com", "dice.com",
+    "ziprecruiter.com", "ziprecruiter.ie", "glassdoor.com",
 }
 MARKETPLACES = {
     "upwork.com", "freelancer.com", "arc.dev", "toptal.com",
