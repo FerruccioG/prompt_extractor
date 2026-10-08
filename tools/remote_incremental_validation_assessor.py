@@ -189,19 +189,23 @@ def main() -> int:
             "redirected_to_different_host": bool(final_host and final_host != original_host),
         }
 
-        if contains_any(blob, BOT_OR_ACCESS_TERMS):
-            check_later.append({
-                **assessed,
-                "assessment": "check_later",
-                "assessment_reason": "bot_or_access_challenge",
-            })
-            continue
-
+        # A confirmed parking/for-sale destination is stronger semantic
+        # evidence than incidental anti-bot wording on the parking provider.
+        # Assess invalid destination first so a GoDaddy/Afternic parking page
+        # cannot be downgraded to mere "check later".
         if looks_like_parked_host(final_host, final_url, blob):
             excluded.append({
                 **assessed,
                 "assessment": "exclude_invalid",
                 "assessment_reason": "parked_for_sale_or_disposable_destination",
+            })
+            continue
+
+        if contains_any(blob, BOT_OR_ACCESS_TERMS):
+            check_later.append({
+                **assessed,
+                "assessment": "check_later",
+                "assessment_reason": "bot_or_access_challenge",
             })
             continue
 
