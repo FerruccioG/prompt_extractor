@@ -4,10 +4,13 @@ remote_golden_refresh.py
 
 Remote Job Opportunities Golden Master List Refresh.
 
-Checkpoint 2:
+Checkpoint 3 foundation:
 - persistent state/watermark foundation
 - incremental Gmail intake for subject:Remote
-- run-specific audit and URL queue
+- preserve raw email text and raw URLs
+- classify URLs into actionable/context/noise
+- canonicalize actionable LinkedIn job/post/group targets
+- run-specific queues
 - watermark is intentionally NOT advanced yet
 """
 
@@ -16,10 +19,12 @@ from __future__ import annotations
 import imaplib
 import json
 import os
+import re
 import sys
 from datetime import UTC, datetime
 from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -147,6 +152,121 @@ def uid_number(uid: bytes | str) -> int:
     return int(uid)
 
 
+def compact_email_text(parts: list[str]) -> str:
+    """
+    Preserve the readable email body as evidence without altering the raw message.
+
+    We retain decoded text/plain and text/html content because notification text can
+    expose job title, employer, remote scope, location, salary, and other signals
+    before a downstream browser visit.
+    """
+    return "\n\n".join(part.strip() for part in parts if part and part.strip())
+
+
+def classify_harvest_url(url: str, intake_channel: str) -> dict:
+    """
+    Classify one raw email URL.
+
+    Buckets:
+    - actionable: worth downstream harvesting
+    - context: useful evidence, but not a primary harvest target
+    - noise: template/CDN/navigation/app-store/tracking material
+
+    Raw URLs are always preserved separately in email_audit.jsonl/url_queue.jsonl.
+    """
+    if intake_channel == "self_submitted":
+        return {
+            "bucket": "actionable",
+            "canonical_url": url,
+            "reason": "self_submitted_discovery",
+        }
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+
+    hard_noise_hosts = {
+        "media.licdn.com",
+        "static.licdn.com",
+        "www.w3.org",
+        "itunes.apple.com",
+        "play.google.com",
+    }
+    if host in hard_noise_hosts:
+        return {
+            "bucket": "noise",
+            "canonical_url": None,
+            "reason": "template_asset_or_app_link",
+        }
+
+    linkedin_hosts = {"linkedin.com", "www.linkedin.com"}
+    if host in linkedin_hosts:
+        job_match = re.search(r"/comm/jobs/view/(\d+)", path)
+        if job_match:
+            job_id = job_match.group(1)
+            return {
+                "bucket": "actionable",
+                "canonical_url": f"https://www.linkedin.com/jobs/view/{job_id}/",
+                "reason": "linkedin_job",
+            }
+
+        update_match = re.search(r"/comm/feed/update/(urn:li:[^/?]+)", path)
+        if update_match:
+            urn = update_match.group(1)
+            return {
+                "bucket": "actionable",
+                "canonical_url": f"https://www.linkedin.com/feed/update/{urn}",
+                "reason": "linkedin_post",
+            }
+
+        group_match = re.search(r"/comm/groups/(\d+)", path)
+        if group_match:
+            group_id = group_match.group(1)
+            return {
+                "bucket": "actionable",
+                "canonical_url": f"https://www.linkedin.com/groups/{group_id}/",
+                "reason": "linkedin_group",
+            }
+
+        if path.startswith("/comm/jobs/search-results/"):
+            return {
+                "bucket": "context",
+                "canonical_url": url,
+                "reason": "linkedin_job_search_context",
+            }
+
+        linkedin_noise_prefixes = (
+            "/comm/feed/",
+            "/comm/jobs/alerts",
+            "/comm/messaging/",
+            "/comm/mynetwork/",
+            "/comm/mypreferences/",
+            "/comm/notifications/",
+            "/comm/premium/",
+            "/help/",
+            "/emimp/",
+        )
+        if path.startswith(linkedin_noise_prefixes):
+            return {
+                "bucket": "noise",
+                "canonical_url": None,
+                "reason": "linkedin_template_or_navigation",
+            }
+
+        return {
+            "bucket": "context",
+            "canonical_url": url,
+            "reason": "linkedin_unclassified_context",
+        }
+
+    # Preserve recall for unfamiliar inbound providers.
+    return {
+        "bucket": "actionable",
+        "canonical_url": url,
+        "reason": "inbound_non_linkedin_preserve_recall",
+    }
+
+
 def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) -> dict:
     email_address = getenv_required("EMAIL_ADDRESS")
     email_app_password = getenv_required("EMAIL_APP_PASSWORD")
@@ -168,7 +288,13 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
 
     email_rows: list[dict] = []
     queue_rows: list[dict] = []
+    actionable_rows: list[dict] = []
+    context_rows: list[dict] = []
+    noise_rows: list[dict] = []
+
     unique_urls: set[str] = set()
+    unique_actionable: set[str] = set()
+    unique_context: set[str] = set()
 
     matched_uids = 0
     eligible_uids = 0
@@ -240,8 +366,11 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
 
             subject = decode_mime_header_safe(msg.get("Subject", ""))
 
+            text_parts = list(get_text_parts_safe(msg))
+            message_text = compact_email_text(text_parts)
+
             message_urls: set[str] = set()
-            for text_part in get_text_parts_safe(msg):
+            for text_part in text_parts:
                 message_urls.update(extract_all_urls(text_part))
 
             sorted_urls = sorted(message_urls)
@@ -255,6 +384,7 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
                 "email_datetime_utc": iso_or_blank(parsed_email_dt),
                 "url_count": len(sorted_urls),
                 "urls": sorted_urls,
+                "email_text": message_text,
             })
 
             for url in sorted_urls:
@@ -262,7 +392,8 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
                     continue
 
                 unique_urls.add(url)
-                queue_rows.append({
+
+                raw_row = {
                     "url": url,
                     "source_message_uid": numeric_uid,
                     "source_subject": subject,
@@ -271,7 +402,29 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
                     "landing_type": landing_type_for(url),
                     "platform": detect_platform(url),
                     "status": "pending",
-                })
+                }
+                queue_rows.append(raw_row)
+
+                decision = classify_harvest_url(url, intake_channel)
+                classified_row = {
+                    **raw_row,
+                    "bucket": decision["bucket"],
+                    "canonical_url": decision["canonical_url"],
+                    "classification_reason": decision["reason"],
+                }
+
+                if decision["bucket"] == "actionable":
+                    key = decision["canonical_url"] or url
+                    if key not in unique_actionable:
+                        unique_actionable.add(key)
+                        actionable_rows.append(classified_row)
+                elif decision["bucket"] == "context":
+                    key = decision["canonical_url"] or url
+                    if key not in unique_context:
+                        unique_context.add(key)
+                        context_rows.append(classified_row)
+                else:
+                    noise_rows.append(classified_row)
 
     finally:
         if mail is not None:
@@ -282,9 +435,15 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
 
     email_audit_path = run_dir / "email_audit.jsonl"
     url_queue_path = run_dir / "url_queue.jsonl"
+    actionable_path = run_dir / "actionable_url_queue.jsonl"
+    context_path = run_dir / "context_url_queue.jsonl"
+    noise_path = run_dir / "noise_url_queue.jsonl"
 
     write_jsonl(email_audit_path, email_rows)
     write_jsonl(url_queue_path, queue_rows)
+    write_jsonl(actionable_path, actionable_rows)
+    write_jsonl(context_path, context_rows)
+    write_jsonl(noise_path, noise_rows)
 
     result = {
         "gmail_query": gmail_query,
@@ -296,10 +455,16 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
         "inbound_notification_emails": inbound_notification_emails,
         "skipped_before_watermark": skipped_before_watermark,
         "unique_urls": len(queue_rows),
+        "actionable_urls": len(actionable_rows),
+        "context_urls": len(context_rows),
+        "noise_urls": len(noise_rows),
         "candidate_newest_message_uid": newest_uid,
         "candidate_newest_email_datetime_utc": iso_or_blank(newest_email_datetime),
         "email_audit_path": str(email_audit_path),
         "url_queue_path": str(url_queue_path),
+        "actionable_url_queue_path": str(actionable_path),
+        "context_url_queue_path": str(context_path),
+        "noise_url_queue_path": str(noise_path),
     }
 
     return result
@@ -328,7 +493,7 @@ def main() -> int:
         return 1
 
     manifest = {
-        "status": "checkpoint_2_intake_complete",
+        "status": "checkpoint_3_intake_classified",
         "run_started_utc": iso_or_blank(run_started),
         "state_before": state,
         "intake": intake,
@@ -340,20 +505,27 @@ def main() -> int:
         json.dump(manifest, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
 
-    print("GMAIL INTAKE OK")
+    print("GMAIL INTAKE + URL CLASSIFICATION OK")
     print(f"Matched by Gmail query:     {intake['matched_uids']}")
     print(f"Eligible new emails:        {intake['eligible_new_emails']}")
-    print(f"Unique URLs extracted:      {intake['unique_urls']}")
     print(f"Self-submitted emails:      {intake['self_submitted_emails']}")
     print(f"Inbound notifications:      {intake['inbound_notification_emails']}")
+    print(f"Unique raw URLs:            {intake['unique_urls']}")
+    print(f"Actionable harvest URLs:    {intake['actionable_urls']}")
+    print(f"Context-only URLs:          {intake['context_urls']}")
+    print(f"Noise URLs:                 {intake['noise_urls']}")
     print(f"Fetch errors:               {intake['emails_with_fetch_errors']}")
     print(f"Candidate newest UID:       {intake['candidate_newest_message_uid'] or 'none'}")
     print(f"Email audit:                {intake['email_audit_path']}")
-    print(f"URL queue:                  {intake['url_queue_path']}")
+    print(f"Raw URL queue:              {intake['url_queue_path']}")
+    print(f"Actionable URL queue:       {intake['actionable_url_queue_path']}")
+    print(f"Context URL queue:          {intake['context_url_queue_path']}")
+    print(f"Noise URL queue:            {intake['noise_url_queue_path']}")
     print(f"Run manifest:               {manifest_path}")
     print()
-    print("CHECKPOINT 2 COMPLETE")
-    print("No social/web content was harvested.")
+    print("CHECKPOINT 3 FOUNDATION COMPLETE")
+    print("Raw email text and raw URLs were preserved.")
+    print("No social/web content was harvested yet.")
     print("No source was validated or scored.")
     print("Excel was NOT touched.")
     print("Watermark was NOT advanced.")
