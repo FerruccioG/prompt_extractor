@@ -216,11 +216,6 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
                 else "inbound_notification"
             )
 
-            if intake_channel == "self_submitted":
-                self_submitted_emails += 1
-            else:
-                inbound_notification_emails += 1
-
             parsed_email_dt = email_date_utc(msg.get("Date", ""))
 
             # Bootstrap safety: Gmail's after: query is day-granular, so enforce
@@ -231,6 +226,12 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
                     continue
 
             eligible_uids += 1
+
+            if intake_channel == "self_submitted":
+                self_submitted_emails += 1
+            else:
+                inbound_notification_emails += 1
+
             newest_uid = numeric_uid if newest_uid is None else max(newest_uid, numeric_uid)
 
             if parsed_email_dt is not None:
