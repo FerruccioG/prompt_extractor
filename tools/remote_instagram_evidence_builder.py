@@ -144,6 +144,7 @@ def main() -> int:
         rows = sorted(rows, key=lambda r: r.get("slide_index", 0))
         combined_text = "\n".join((r.get("ocr_text_raw") or "") for r in rows)
         lower_text = combined_text.lower()
+        normalized_text = " ".join(lower_text.split())
         result = result_by_id.get(post_id, {})
         source_url = result.get("normalized_url")
         content_type = result.get("content_type")
@@ -218,7 +219,7 @@ def main() -> int:
         # A reel can advertise a list/resource while the single screenshot does
         # not expose the actual names. Those need richer video/frame extraction.
         list_signal = any(
-            phrase in lower_text
+            phrase in normalized_text
             for phrase in (
                 "remote jobs hiring",
                 "remote job sites",
