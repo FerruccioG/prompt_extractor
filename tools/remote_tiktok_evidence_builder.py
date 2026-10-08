@@ -58,6 +58,10 @@ GENERIC_HOSTS = {
     "tiktok.com",
     "www.tiktok.com",
     "vm.tiktok.com",
+    # Documentation/test placeholders sometimes appear in social page boilerplate.
+    "example.com",
+    "example.org",
+    "example.net",
 }
 
 PLAUSIBLE_TLDS = {
@@ -136,8 +140,23 @@ def main() -> int:
     if not ocr_path.exists():
         raise RuntimeError(f"TikTok OCR not found: {ocr_path}")
 
-    results = read_jsonl(results_path)
+    raw_results = read_jsonl(results_path)
     ocr_rows = [r for r in read_jsonl(ocr_path) if not r.get("event")]
+
+    # Harvest results are append-only/resume-friendly. Collapse duplicate reruns
+    # of the same TikTok target before evidence extraction.
+    results_by_key: dict[str, dict[str, Any]] = {}
+    for row in raw_results:
+        key = str(
+            row.get("requested_url")
+            or row.get("normalized_url")
+            or row.get("canonical_url")
+            or row.get("final_url")
+            or ""
+        ).strip()
+        if key:
+            results_by_key[key] = row
+    results = list(results_by_key.values())
 
     evidence: list[dict[str, Any]] = []
     unresolved: list[dict[str, Any]] = []
@@ -150,13 +169,15 @@ def main() -> int:
 
         # This refresh currently has one TikTok target, so OCR output belongs to
         # this result. The evidence retains each frame's provenance.
-        combined_parts = [
+        page_and_ocr_parts = [
             str(result.get("page_title") or ""),
             str(result.get("visible_text") or ""),
-            source_subject,
         ]
-        combined_parts.extend(str(r.get("ocr_text_raw") or "") for r in ocr_rows)
-        combined_text = "\n".join(combined_parts)
+        page_and_ocr_parts.extend(str(r.get("ocr_text_raw") or "") for r in ocr_rows)
+        page_and_ocr_text = "\n".join(page_and_ocr_parts)
+        page_and_ocr_lower = " ".join(page_and_ocr_text.lower().split())
+
+        combined_text = page_and_ocr_text + "\n" + source_subject
         lower = " ".join(combined_text.lower().split())
 
         for match in DOMAIN_RE.finditer(combined_text):
@@ -183,15 +204,26 @@ def main() -> int:
             domain = normalized_domain(urlparse(url).hostname or "")
             if not domain or domain in seen:
                 continue
+
+            if label in page_and_ocr_lower:
+                evidence_type = "named_source_in_tiktok_page_or_ocr"
+                confidence = "medium"
+                provenance = "tiktok_page_or_video_ocr"
+            else:
+                evidence_type = "named_source_in_email_subject_only"
+                confidence = "low"
+                provenance = "email_subject"
+
             seen.add(domain)
             evidence.append({
                 "tiktok_url": tiktok_url,
                 "requested_url": requested_url,
-                "evidence_type": "named_source_in_tiktok_evidence",
+                "evidence_type": evidence_type,
+                "evidence_provenance": provenance,
                 "ocr_observed": label,
                 "candidate_domain": domain,
                 "candidate_url": url,
-                "confidence": "medium",
+                "confidence": confidence,
                 "status": "needs_validation",
             })
 
@@ -214,7 +246,9 @@ def main() -> int:
 
     manifest = {
         "status": "ok",
+        "tiktok_result_rows_raw": len(raw_results),
         "tiktok_targets": len(results),
+        "duplicate_result_rows_collapsed": len(raw_results) - len(results),
         "ocr_rows": len(ocr_rows),
         "candidate_evidence_rows": len(evidence),
         "needs_resolution": len(unresolved),
@@ -230,7 +264,9 @@ def main() -> int:
     print("REMOTE TIKTOK EVIDENCE BUILD OK")
     print("=" * 58)
     print(f"Run directory:              {run_dir}")
-    print(f"TikTok targets:             {len(results)}")
+    print(f"Raw TikTok result rows:     {len(raw_results)}")
+    print(f"Unique TikTok targets:      {len(results)}")
+    print(f"Duplicate rows collapsed:   {len(raw_results) - len(results)}")
     print(f"OCR evidence rows:          {len(ocr_rows)}")
     print(f"Candidate evidence rows:    {len(evidence)}")
     print(f"Needs resolution:           {len(unresolved)}")
