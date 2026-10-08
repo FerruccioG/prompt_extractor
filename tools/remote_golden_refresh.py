@@ -174,16 +174,31 @@ def classify_harvest_url(url: str, intake_channel: str) -> dict:
 
     Raw URLs are always preserved separately in email_audit.jsonl/url_queue.jsonl.
     """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+
     if intake_channel == "self_submitted":
+        if host in {"instagram.com", "www.instagram.com", "m.instagram.com"}:
+            clean_path = path.rstrip("/") + "/"
+            if clean_path.startswith("/reel/"):
+                return {
+                    "bucket": "actionable",
+                    "canonical_url": f"https://www.instagram.com{clean_path}",
+                    "reason": "instagram_reel",
+                }
+            if clean_path.startswith("/p/"):
+                return {
+                    "bucket": "actionable",
+                    "canonical_url": f"https://www.instagram.com{clean_path}",
+                    "reason": "instagram_post",
+                }
+
         return {
             "bucket": "actionable",
             "canonical_url": url,
             "reason": "self_submitted_discovery",
         }
-
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    path = parsed.path or ""
 
     hard_noise_hosts = {
         "media.licdn.com",
