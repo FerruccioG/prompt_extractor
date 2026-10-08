@@ -18,7 +18,7 @@ import json
 import os
 import sys
 from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
+from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -49,8 +49,6 @@ RUNS_DIR = REMOTE_DATA_DIR / "refresh_runs"
 
 HISTORICAL_CUTOFF_LOCAL_DATE = "2026-10-06"
 INITIAL_WATERMARK_UTC = "2026-10-06T23:00:00Z"
-BOOTSTRAP_GMAIL_QUERY = "subject:Remote after:2026/10/06"
-NORMAL_GMAIL_QUERY = "subject:Remote"
 STATE_VERSION = 1
 
 
@@ -161,7 +159,12 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
     last_uid = int(last_uid_raw) if last_uid_raw not in (None, "") else None
     watermark = parse_utc(state["last_successful_watermark_utc"])
 
-    gmail_query = NORMAL_GMAIL_QUERY if last_uid is not None else BOOTSTRAP_GMAIL_QUERY
+    base_query = f"from:{email_address} subject:Remote"
+    gmail_query = (
+        base_query
+        if last_uid is not None
+        else f"{base_query} after:2026/10/06"
+    )
 
     email_rows: list[dict] = []
     queue_rows: list[dict] = []
@@ -171,6 +174,7 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
     eligible_uids = 0
     skipped_before_watermark = 0
     skipped_old_uid = 0
+    skipped_wrong_sender = 0
     fetch_errors = 0
     newest_uid: int | None = None
     newest_email_datetime: datetime | None = None
@@ -202,6 +206,16 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
                 })
                 continue
 
+            from_value = decode_mime_header_safe(msg.get("From", ""))
+            sender_address = parseaddr(from_value)[1].strip().lower()
+
+            # Defensive second gate: Gmail should already enforce from:,
+            # but never admit unrelated notifications that merely contain
+            # the word "Remote" in their subject.
+            if sender_address != email_address.strip().lower():
+                skipped_wrong_sender += 1
+                continue
+
             parsed_email_dt = email_date_utc(msg.get("Date", ""))
 
             # Bootstrap safety: Gmail's after: query is day-granular, so enforce
@@ -219,7 +233,6 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
                     newest_email_datetime = parsed_email_dt
 
             subject = decode_mime_header_safe(msg.get("Subject", ""))
-            from_value = decode_mime_header_safe(msg.get("From", ""))
 
             message_urls: set[str] = set()
             for text_part in get_text_parts_safe(msg):
@@ -271,6 +284,7 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
         "eligible_new_emails": eligible_uids,
         "emails_with_fetch_errors": fetch_errors,
         "skipped_old_uid": skipped_old_uid,
+        "skipped_wrong_sender": skipped_wrong_sender,
         "skipped_before_watermark": skipped_before_watermark,
         "unique_urls": len(queue_rows),
         "candidate_newest_message_uid": newest_uid,
@@ -321,6 +335,7 @@ def main() -> int:
     print(f"Matched by Gmail query:     {intake['matched_uids']}")
     print(f"Eligible new emails:        {intake['eligible_new_emails']}")
     print(f"Unique URLs extracted:      {intake['unique_urls']}")
+    print(f"Skipped wrong sender:       {intake['skipped_wrong_sender']}")
     print(f"Fetch errors:               {intake['emails_with_fetch_errors']}")
     print(f"Candidate newest UID:       {intake['candidate_newest_message_uid'] or 'none'}")
     print(f"Email audit:                {intake['email_audit_path']}")
