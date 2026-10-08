@@ -48,6 +48,24 @@ GENERIC_HOSTS = {
     "www.instagram.com",
 }
 
+PLAUSIBLE_OCR_TLDS = {
+    "ai", "app", "co", "com", "dev", "eu", "ie", "io", "jobs",
+    "net", "org", "tech", "today", "uk", "work",
+}
+
+
+def has_plausible_ocr_tld(domain: str) -> bool:
+    """
+    Guard the OCR-domain detector against social handles such as
+    'workfromhome.myra'. Unknown suffix-like tokens remain preserved in the raw
+    OCR evidence, but do not suppress deeper harvesting of the reel.
+    """
+    labels = domain.lower().rstrip(".").split(".")
+    if len(labels) < 2:
+        return False
+    return labels[-1] in PLAUSIBLE_OCR_TLDS
+
+
 
 def read_jsonl(path: Path) -> list[dict]:
     rows: list[dict] = []
@@ -135,6 +153,8 @@ def main() -> int:
         for match in DOMAIN_RE.finditer(combined_text):
             raw_domain = normalized_domain(match.group(1))
             if not raw_domain or raw_domain in GENERIC_HOSTS:
+                continue
+            if not has_plausible_ocr_tld(raw_domain):
                 continue
 
             corrected = OCR_CORRECTION_CANDIDATES.get(raw_domain)
