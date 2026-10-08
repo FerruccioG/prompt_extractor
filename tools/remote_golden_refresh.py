@@ -159,7 +159,7 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
     last_uid = int(last_uid_raw) if last_uid_raw not in (None, "") else None
     watermark = parse_utc(state["last_successful_watermark_utc"])
 
-    base_query = f"from:{email_address} subject:Remote"
+    base_query = "subject:Remote"
     gmail_query = (
         base_query
         if last_uid is not None
@@ -174,7 +174,8 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
     eligible_uids = 0
     skipped_before_watermark = 0
     skipped_old_uid = 0
-    skipped_wrong_sender = 0
+    self_submitted_emails = 0
+    inbound_notification_emails = 0
     fetch_errors = 0
     newest_uid: int | None = None
     newest_email_datetime: datetime | None = None
@@ -209,12 +210,16 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
             from_value = decode_mime_header_safe(msg.get("From", ""))
             sender_address = parseaddr(from_value)[1].strip().lower()
 
-            # Defensive second gate: Gmail should already enforce from:,
-            # but never admit unrelated notifications that merely contain
-            # the word "Remote" in their subject.
-            if sender_address != email_address.strip().lower():
-                skipped_wrong_sender += 1
-                continue
+            intake_channel = (
+                "self_submitted"
+                if sender_address == email_address.strip().lower()
+                else "inbound_notification"
+            )
+
+            if intake_channel == "self_submitted":
+                self_submitted_emails += 1
+            else:
+                inbound_notification_emails += 1
 
             parsed_email_dt = email_date_utc(msg.get("Date", ""))
 
@@ -245,6 +250,7 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
                 "status": "ok",
                 "subject": subject,
                 "from": from_value,
+                "intake_channel": intake_channel,
                 "email_datetime_utc": iso_or_blank(parsed_email_dt),
                 "url_count": len(sorted_urls),
                 "urls": sorted_urls,
@@ -259,6 +265,7 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
                     "url": url,
                     "source_message_uid": numeric_uid,
                     "source_subject": subject,
+                    "intake_channel": intake_channel,
                     "email_datetime_utc": iso_or_blank(parsed_email_dt),
                     "landing_type": landing_type_for(url),
                     "platform": detect_platform(url),
@@ -284,7 +291,8 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
         "eligible_new_emails": eligible_uids,
         "emails_with_fetch_errors": fetch_errors,
         "skipped_old_uid": skipped_old_uid,
-        "skipped_wrong_sender": skipped_wrong_sender,
+        "self_submitted_emails": self_submitted_emails,
+        "inbound_notification_emails": inbound_notification_emails,
         "skipped_before_watermark": skipped_before_watermark,
         "unique_urls": len(queue_rows),
         "candidate_newest_message_uid": newest_uid,
@@ -335,7 +343,8 @@ def main() -> int:
     print(f"Matched by Gmail query:     {intake['matched_uids']}")
     print(f"Eligible new emails:        {intake['eligible_new_emails']}")
     print(f"Unique URLs extracted:      {intake['unique_urls']}")
-    print(f"Skipped wrong sender:       {intake['skipped_wrong_sender']}")
+    print(f"Self-submitted emails:      {intake['self_submitted_emails']}")
+    print(f"Inbound notifications:      {intake['inbound_notification_emails']}")
     print(f"Fetch errors:               {intake['emails_with_fetch_errors']}")
     print(f"Candidate newest UID:       {intake['candidate_newest_message_uid'] or 'none'}")
     print(f"Email audit:                {intake['email_audit_path']}")
