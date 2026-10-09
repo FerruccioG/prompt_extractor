@@ -145,6 +145,18 @@ def access_state(final_url: str, title: str, text: str) -> tuple[str, str]:
     for marker in ACCESS_WALL_MARKERS:
         if marker in blob:
             return "access_limited", marker
+
+    # LinkedIn can return a rendered error shell with substantial visible text.
+    # Treat that as unresolved rather than a successful harvest.
+    not_found_markers = (
+        "page not found",
+        "we can’t seem to find the page",
+        "we can't seem to find the page",
+    )
+    for marker in not_found_markers:
+        if marker in blob:
+            return "unresolved", "linkedin_page_not_found"
+
     if text.strip():
         return "ok", ""
     return "unresolved", "no_visible_text"
