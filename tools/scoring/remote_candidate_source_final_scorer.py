@@ -96,11 +96,11 @@ RECRUITERS = {
 }
 EMPLOYER_CAREERS = {
     "microsoft.com", "zendesk.com", "bunq.com", "accelerationpartners.com",
-    "red-gate.com", "replit.com",
+    "red-gate.com", "replit.com", "accenture.com", "kraken.com", "tether.io",
 }
 COMMUNITIES_OR_ADVICE = {
     "growremote.ie", "job-hunt.org", "linkedintalentconnect.com",
-    "productcollective.com", "hbswk.hbs.edu",
+    "productcollective.com", "hbswk.hbs.edu", "platformengineering.org",
 }
 CONTENT_OR_LOW_DIRECTNESS = {
     "timesofindia.indiatimes.com", "blog.yelp.com", "gartner.com",
