@@ -61,8 +61,19 @@ def main() -> int:
     remote_root = ROOT_DIR / "data" / "remote"
     linkedin_dir = run_dir / "harvest" / "linkedin"
 
-    evidence_path = linkedin_dir / "resolved_candidate_source_evidence.jsonl"
-    unresolved_input_path = linkedin_dir / "still_needs_resolution.jsonl"
+    evidence_v2 = linkedin_dir / "resolved_candidate_source_evidence_v2.jsonl"
+    unresolved_v2 = linkedin_dir / "still_needs_resolution_v2.jsonl"
+
+    evidence_path = (
+        evidence_v2
+        if evidence_v2.exists()
+        else linkedin_dir / "resolved_candidate_source_evidence.jsonl"
+    )
+    unresolved_input_path = (
+        unresolved_v2
+        if unresolved_v2.exists()
+        else linkedin_dir / "still_needs_resolution.jsonl"
+    )
 
     if not evidence_path.exists():
         raise RuntimeError(f"LinkedIn resolved evidence not found: {evidence_path}")
@@ -161,6 +172,8 @@ def main() -> int:
     print("REMOTE LINKEDIN CANDIDATE DEDUPE OK")
     print("=" * 58)
     print(f"Run directory:                  {run_dir}")
+    print(f"Resolved evidence input:        {evidence_path}")
+    print(f"Unresolved input:               {unresolved_input_path}")
     print(f"Input resolved evidence rows:   {len(rows)}")
     print(f"Unique candidate hosts:         {len(current)}")
     print(f"Already known hosts:            {len(known_rows)}")
