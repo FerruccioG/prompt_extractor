@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT_DIR))
+
 REMOTE_ROOT = ROOT_DIR / "data" / "remote"
 STATE_PATH = REMOTE_ROOT / "remote_golden_refresh_state.json"
 
