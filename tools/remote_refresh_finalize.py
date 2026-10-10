@@ -2,8 +2,8 @@
 """
 remote_refresh_finalize.py
 
-Finalize one completed Remote Golden refresh run when there are NO Golden
-promotions, plus the valid no-new-email no-op case.
+Finalize one completed Remote Golden refresh run, including Golden promotions,
+zero-promotion runs, and the valid no-new-email no-op case.
 
 Safety contract
 ---------------
@@ -11,11 +11,12 @@ Safety contract
 - any Gmail fetch error blocks finalization
 - Gmail UID is the operational checkpoint authority; email Date is metadata only
 - candidate-level unresolved evidence is persisted as Check Later, not discarded
-- promotion count must be zero in this finalizer
-- performs read-only Golden Excel integrity validation
+- zero-promotion/no-op runs perform read-only Golden Excel integrity validation
+- promotion runs merge Golden JSONL, back up the workbook, publish through the
+  existing Excel loader, and validate workbook integrity before committing state
 - prepares all cumulative disposition artifacts before committing them
 - advances state only after every preceding step succeeds
-- never writes the Excel workbook in this zero-promotion/no-op path
+- restores workbook/Golden JSONL if a promotion transaction fails before state commit
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -212,6 +214,58 @@ def safe_metadata_watermark(old_value: str, candidate_value: str) -> str:
     return candidate_value if candidate_value > old_value else old_value
 
 
+
+def merge_golden_records(
+    baseline: list[dict[str, Any]],
+    promotions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Merge promotions by durable source identity while preserving baseline order."""
+    merged = [dict(row) for row in baseline]
+    index: dict[str, int] = {}
+    for i, row in enumerate(merged):
+        key = source_key(row)
+        if key:
+            index[key] = i
+
+    appended = 0
+    updated = 0
+    for row in promotions:
+        key = source_key(row)
+        if not key:
+            raise RuntimeError("Promotion row has no canonical source identity")
+        clean = {
+            k: v for k, v in row.items()
+            if not str(k).startswith("_")
+        }
+        if key in index:
+            pos = index[key]
+            merged[pos] = {**merged[pos], **clean}
+            updated += 1
+        else:
+            index[key] = len(merged)
+            merged.append(clean)
+            appended += 1
+
+    return merged, appended, updated
+
+
+def run_excel_loader(workbook: Path, source_records: Path) -> int:
+    os.environ["REMOTE_EXCEL_OUTPUT_PATH"] = str(workbook)
+    os.environ["REMOTE_SOURCE_RECORDS_PATH"] = str(source_records)
+    os.environ.pop("REMOTE_EXCEL_DRY_RUN", None)
+    from tools.storage import excel_source_loader
+    return excel_source_loader.main()
+
+
+def backup_file(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+
+
+def restore_file(backup: Path, destination: Path) -> None:
+    if backup.exists():
+        shutil.copy2(backup, destination)
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=Path, default=None)
@@ -289,34 +343,11 @@ def main() -> int:
 
     promote_count = int(reconciliation.get("promote", -1))
     unresolved_count = int(reconciliation.get("unresolved", 0) or 0)
-    if promote_count != 0:
-        raise RuntimeError(
-            f"Cannot use zero-promotion finalizer: promote={promote_count}. "
-            "Excel publication transaction is required."
-        )
-
-    print("REMOTE REFRESH ZERO-PROMOTION FINALIZATION")
-    print("=" * 64)
-    print(f"Run directory:                 {run_dir}")
-    print(f"Golden promotions:             {promote_count}")
-    print(f"Candidate unresolved:          {unresolved_count} (persisted as Check Later)")
-    print(f"Workbook:                      {workbook}")
-    print(f"Golden source-record baseline: {golden_input}")
-    print()
-    print("Running read-only Golden workbook integrity validation...")
-    print()
-
-    integrity_rc = run_excel_integrity(workbook, golden_input)
-    if integrity_rc != 0:
-        print()
-        print("FINALIZATION STOPPED: Excel integrity validation failed.")
-        print("No persistent dispositions were written.")
-        print("Watermark was NOT advanced.")
-        return 1
 
     hold_rows = load_jsonl(reconciliation_dir / "hold_review.jsonl")
     exclude_rows = load_jsonl(reconciliation_dir / "exclude.jsonl")
     check_rows = load_jsonl(reconciliation_dir / "check_later.jsonl")
+    promote_rows = load_jsonl(reconciliation_dir / "promote.jsonl")
     unresolved_rows = [
         {
             **row,
@@ -332,6 +363,12 @@ def main() -> int:
     check_rows = check_rows + unresolved_rows
     known_rows = collect_known_evidence(run_dir)
 
+    if promote_count != len(promote_rows):
+        raise RuntimeError(
+            f"Reconciliation promotion count mismatch: manifest={promote_count}, "
+            f"rows={len(promote_rows)}"
+        )
+
     prepared: dict[str, tuple[Path, list[dict[str, Any]], int]] = {}
     for name, incoming, disposition in (
         ("hold_review", hold_rows, "hold_review"),
@@ -346,19 +383,108 @@ def main() -> int:
     staged: dict[Path, Path] = {}
     for destination, rows, _accepted in prepared.values():
         staged[destination] = stage_jsonl(destination, rows)
+
+    excel_written = False
+    publication_dir = run_dir / "publication"
+    merged_golden_path = publication_dir / "merged_golden.jsonl"
+    workbook_backup = publication_dir / "workbook_before_publication.xlsx"
+    golden_backup = publication_dir / "golden_before_publication.jsonl"
+    golden_appended = 0
+    golden_updated = 0
+
+    if promote_count == 0:
+        print("REMOTE REFRESH ZERO-PROMOTION FINALIZATION")
+        print("=" * 64)
+        print(f"Run directory:                 {run_dir}")
+        print("Golden promotions:             0")
+        print(f"Candidate unresolved:          {unresolved_count} (persisted as Check Later)")
+        print(f"Workbook:                      {workbook}")
+        print(f"Golden source-record baseline: {golden_input}")
+        print()
+        print("Running read-only Golden workbook integrity validation...")
+        print()
+
+        integrity_rc = run_excel_integrity(workbook, golden_input)
+        if integrity_rc != 0:
+            print("FINALIZATION STOPPED: Excel integrity validation failed.")
+            print("No persistent dispositions were written.")
+            print("Watermark was NOT advanced.")
+            return 1
+    else:
+        print("REMOTE REFRESH GOLDEN PUBLICATION")
+        print("=" * 64)
+        print(f"Run directory:                 {run_dir}")
+        print(f"Golden promotions:             {promote_count}")
+        print(f"Workbook:                      {workbook}")
+        print(f"Golden source-record baseline: {golden_input}")
+        print()
+
+        baseline_rows = load_jsonl(golden_input)
+        merged_rows, golden_appended, golden_updated = merge_golden_records(
+            baseline_rows,
+            promote_rows,
+        )
+        publication_dir.mkdir(parents=True, exist_ok=True)
+        merged_tmp = stage_jsonl(merged_golden_path, merged_rows)
+        merged_tmp.replace(merged_golden_path)
+
+        if not workbook.exists():
+            raise FileNotFoundError(f"Golden workbook not found: {workbook}")
+
+        backup_file(workbook, workbook_backup)
+        backup_file(golden_input, golden_backup)
+
+        print(f"Golden rows before:             {before_count}")
+        print(f"Golden rows after merge:        {len(merged_rows)}")
+        print(f"New canonical rows appended:    {golden_appended}")
+        print(f"Existing canonical rows updated:{golden_updated}")
+        print("Publishing merged Golden records to Excel...")
+
+        loader_rc = run_excel_loader(workbook, merged_golden_path)
+        if loader_rc != 0:
+            restore_file(workbook_backup, workbook)
+            print("PUBLICATION STOPPED: Excel loader failed.")
+            print("Workbook restored from pre-publication backup.")
+            print("Watermark was NOT advanced.")
+            return 1
+
+        integrity_rc = run_excel_integrity(workbook, merged_golden_path)
+        if integrity_rc != 0:
+            restore_file(workbook_backup, workbook)
+            print("PUBLICATION STOPPED: post-write Excel integrity validation failed.")
+            print("Workbook restored from pre-publication backup.")
+            print("Golden JSONL was NOT changed.")
+            print("Watermark was NOT advanced.")
+            return 1
+
+        try:
+            golden_tmp = stage_jsonl(golden_input, merged_rows)
+            golden_tmp.replace(golden_input)
+            excel_written = True
+        except Exception:
+            restore_file(workbook_backup, workbook)
+            restore_file(golden_backup, golden_input)
+            raise
+
+    # Persist non-Golden dispositions only after Excel/Golden validation succeeds.
     commit_staged(staged)
     persisted = {name: info[2] for name, info in prepared.items()}
 
     candidate_uid = intake.get("candidate_newest_message_uid")
     candidate_watermark = str(intake.get("candidate_newest_email_datetime_utc") or "").strip()
     if candidate_uid in (None, ""):
+        if excel_written:
+            restore_file(workbook_backup, workbook)
+            restore_file(golden_backup, golden_input)
         raise RuntimeError("Cannot advance state: candidate newest message UID is missing")
 
     old_uid = state.get("last_successful_message_uid")
     if old_uid not in (None, "") and int(candidate_uid) < int(old_uid):
+        if excel_written:
+            restore_file(workbook_backup, workbook)
+            restore_file(golden_backup, golden_input)
         raise RuntimeError("Candidate UID would move checkpoint backwards")
 
-    # UID is authoritative. Email Date is retained only as monotonic metadata.
     state["last_successful_message_uid"] = int(candidate_uid)
     state["last_successful_watermark_utc"] = safe_metadata_watermark(
         str(state.get("last_successful_watermark_utc") or ""),
@@ -366,20 +492,30 @@ def main() -> int:
     )
     state["last_successful_run_utc"] = utc_now_iso()
     state["successful_run_count"] = int(state.get("successful_run_count", 0) or 0) + 1
-    write_json_atomic(STATE_PATH, state)
+
+    try:
+        write_json_atomic(STATE_PATH, state)
+    except Exception:
+        if excel_written:
+            restore_file(workbook_backup, workbook)
+            restore_file(golden_backup, golden_input)
+        raise
 
     after_count = golden_count(golden_input)
     final_manifest = {
         "status": "success",
         "run_dir": str(run_dir),
         "golden_before": before_count,
-        "golden_promotions": 0,
+        "golden_promotions": promote_count,
+        "golden_appended": golden_appended,
+        "golden_updated_existing": golden_updated,
         "golden_after": after_count,
-        "excel_written": False,
+        "excel_written": excel_written,
         "excel_integrity_passed": True,
         "candidate_unresolved_persisted_as_check_later": unresolved_count,
         "persistent_rows_written": persisted,
         "checkpoint_authority": "gmail_uid",
+        "watermark_advanced": True,
         "state_after": state,
         "finalized_at_utc": utc_now_iso(),
     }
@@ -393,9 +529,9 @@ def main() -> int:
     print(f"Check Later persisted:         {persisted['check_later']}")
     print(f"Known evidence persisted:      {persisted['known_evidence']}")
     print(f"Golden before:                 {before_count}")
-    print("Golden promotions:             0")
+    print(f"Golden promotions:             {promote_count}")
     print(f"Golden after:                  {after_count}")
-    print("Excel was NOT modified.")
+    print(f"Excel written:                 {'YES' if excel_written else 'NO'}")
     print("Excel integrity:               PASS")
     print(f"Last successful message UID:   {candidate_uid}")
     print(f"Watermark metadata:            {state['last_successful_watermark_utc']}")
