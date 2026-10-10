@@ -290,6 +290,27 @@ def match_existing_row(
     return None
 
 
+def copy_row_format(ws, source_row: int, target_row: int) -> None:
+    """Copy visual formatting from an existing data row without copying values."""
+    if source_row <= 0 or target_row <= 0 or source_row == target_row:
+        return
+
+    for col in range(1, ws.max_column + 1):
+        source = ws.cell(row=source_row, column=col)
+        target = ws.cell(row=target_row, column=col)
+        if source.has_style:
+            target._style = copy(source._style)
+        if source.number_format:
+            target.number_format = source.number_format
+
+    source_dim = ws.row_dimensions[source_row]
+    target_dim = ws.row_dimensions[target_row]
+    if source_dim.height is not None:
+        target_dim.height = source_dim.height
+    target_dim.hidden = source_dim.hidden
+    target_dim.outlineLevel = source_dim.outlineLevel
+
+
 def write_record(
     ws,
     row: int,
@@ -425,6 +446,12 @@ def main() -> int:
                 continue
 
             new_row = ws.max_row + 1
+            # Preserve the established Source Directory row appearance for every
+            # newly appended Golden relationship. This removes the need for
+            # manual Format Painter fixes after an incremental refresh.
+            template_row = new_row - 1 if new_row - 1 > header_row else header_row + 1
+            if template_row < new_row and template_row <= ws.max_row:
+                copy_row_format(ws, template_row, new_row)
             written = write_record(ws, new_row, record, header_map)
             cells_written += written
 
