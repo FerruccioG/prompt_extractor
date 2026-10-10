@@ -4,14 +4,16 @@ remote_golden_refresh.py
 
 Remote Job Opportunities Golden Master List Refresh.
 
-Checkpoint 3 foundation:
+Current foundation:
 - persistent state/watermark foundation
 - incremental Gmail intake for subject:Remote
 - preserve raw email text and raw URLs
 - classify URLs into actionable/context/noise
 - canonicalize actionable LinkedIn job/post/group targets
 - run-specific queues
-- watermark is intentionally NOT advanced yet
+- UID is the operational checkpoint authority
+- any email fetch error blocks commit/watermark advancement
+- watermark is intentionally NOT advanced by this intake stage
 """
 
 from __future__ import annotations
@@ -475,6 +477,10 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
         "noise_urls": len(noise_rows),
         "candidate_newest_message_uid": newest_uid,
         "candidate_newest_email_datetime_utc": iso_or_blank(newest_email_datetime),
+        "checkpoint_authority": "gmail_uid",
+        "commit_eligible": fetch_errors == 0,
+        "blocking_errors": (["email_fetch_errors"] if fetch_errors else []),
+        "no_new_email_noop": eligible_uids == 0 and fetch_errors == 0,
         "email_audit_path": str(email_audit_path),
         "url_queue_path": str(url_queue_path),
         "actionable_url_queue_path": str(actionable_path),
@@ -507,11 +513,20 @@ def main() -> int:
         print("Watermark was NOT advanced.")
         return 1
 
+    if intake["emails_with_fetch_errors"]:
+        manifest_status = "intake_incomplete_fetch_errors"
+    elif intake["no_new_email_noop"]:
+        manifest_status = "intake_noop_no_new_email"
+    else:
+        manifest_status = "intake_ok"
+
     manifest = {
-        "status": "checkpoint_3_intake_classified",
+        "status": manifest_status,
         "run_started_utc": iso_or_blank(run_started),
         "state_before": state,
         "intake": intake,
+        "blocking_errors": intake.get("blocking_errors", []),
+        "commit_eligible": bool(intake.get("commit_eligible")),
         "watermark_advanced": False,
     }
 
@@ -538,10 +553,24 @@ def main() -> int:
     print(f"Noise URL queue:            {intake['noise_url_queue_path']}")
     print(f"Run manifest:               {manifest_path}")
     print()
-    print("CHECKPOINT 3 FOUNDATION COMPLETE")
-    print("Raw email text and raw URLs were preserved.")
-    print("No social/web content was harvested yet.")
-    print("No source was validated or scored.")
+    if intake["emails_with_fetch_errors"]:
+        print("INTAKE INCOMPLETE: one or more emails could not be fetched.")
+        print("This run is NOT eligible for commit or watermark advancement.")
+        print("The failed UID(s) remain visible in email_audit.jsonl for retry.")
+        print("Excel was NOT touched.")
+        print("Watermark was NOT advanced.")
+        return 2
+
+    if intake["no_new_email_noop"]:
+        print("INTAKE COMPLETE: no new Remote emails were found.")
+        print("This is a valid no-op run; downstream finalization may close it safely.")
+    else:
+        print("INTAKE COMPLETE")
+        print("Raw email text and raw URLs were preserved.")
+        print("The run is eligible for downstream harvesting and decision stages.")
+
+    print("No social/web content was harvested by this intake stage.")
+    print("No source was validated or scored by this intake stage.")
     print("Excel was NOT touched.")
     print("Watermark was NOT advanced.")
 

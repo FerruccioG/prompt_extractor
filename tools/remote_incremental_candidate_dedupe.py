@@ -36,37 +36,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+import sys
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT_DIR))
 
-DOMAINISH_RE = re.compile(
-    r"^(?:https?://)?(?:www\.)?([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,})(?:[/:?#].*)?$",
-    re.IGNORECASE,
-)
-
-DOMAIN_KEYS = (
-    "canonical_host",
-    "final_host",
-    "source",
-    "Source",
-    "candidate_domain",
-    "host",
-    "domain",
-)
-
-URL_KEYS = (
-    "canonical_root_url",
-    "candidate_url",
-    "final_url",
-    "url",
-    "URL",
-    "website",
-    "Website",
-)
+from tools.remote_source_identity import canonical_host_from_value, row_hosts
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -107,41 +85,8 @@ def latest_run_dir(root: Path) -> Path:
 
 
 def host_from_value(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    if not text:
-        return ""
-
-    if "://" in text:
-        try:
-            host = (urlparse(text).hostname or "").lower().strip(".")
-            return host[4:] if host.startswith("www.") else host
-        except Exception:
-            return ""
-
-    m = DOMAINISH_RE.match(text)
-    if not m:
-        return ""
-    host = m.group(1).lower().strip(".")
-    return host[4:] if host.startswith("www.") else host
-
-
-def row_hosts(row: dict[str, Any]) -> set[str]:
-    hosts: set[str] = set()
-
-    for key in DOMAIN_KEYS:
-        if key in row:
-            host = host_from_value(row.get(key))
-            if host:
-                hosts.add(host)
-
-    for key in URL_KEYS:
-        if key in row:
-            host = host_from_value(row.get(key))
-            if host:
-                hosts.add(host)
-
-    return hosts
-
+    # Backward-compatible public helper used by platform-specific dedupe tools.
+    return canonical_host_from_value(value)
 
 def classify_artifact(path: Path) -> str:
     name = path.name.lower()

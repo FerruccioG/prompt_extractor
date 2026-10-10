@@ -29,10 +29,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT_DIR))
+
+from tools.remote_source_identity import source_key_from_row
 
 
 def latest_run_dir(root: Path) -> Path:
@@ -73,14 +77,7 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def source_name(row: dict[str, Any]) -> str:
-    for key in (
-        "Source", "canonical_host", "assessed_canonical_host",
-        "original_candidate_host", "candidate_domain", "candidate_name",
-    ):
-        value = str(row.get(key) or "").strip().lower()
-        if value:
-            return value
-    return ""
+    return source_key_from_row(row, allow_evidence_fallback=False)
 
 
 def strict_gate(row: dict[str, Any]) -> tuple[bool, list[str]]:
