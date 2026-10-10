@@ -281,6 +281,30 @@ def score_one(queue_row: dict[str, Any], validation: dict[str, Any] | None) -> d
 
     score = max(0, min(100, score))
 
+    # Incremental candidates reaching this scorer have already passed the
+    # semantic live-source gate. A source with repeated direct discovery
+    # provenance plus both candidate and remote language should not be dropped
+    # solely because its homepage is editorial/community-oriented or exposes no
+    # crawlable job links. Preserve it at Review so the deeper candidate-specific
+    # profiler can make the real Candidate <-> Source decision.
+    prevalidation_reason = str(queue_row.get("prevalidation_reason", "") or "")
+    evidence_backed_incremental = (
+        prevalidation_reason.startswith("incremental_")
+        and resolved
+        and canonical_host not in KNOWN_NON_CANDIDATE
+        and canonical_host not in KNOWN_CONTENT
+        and (candidate_hit_count or candidate_text_hits)
+        and (remote_hit_count or remote_text_hits)
+        and max(
+            int(queue_row.get("email_evidence_count", 0) or 0),
+            int(queue_row.get("discovery_resolution_evidence_count", 0) or 0),
+            int(queue_row.get("evidence_url_count", 0) or 0),
+        ) >= 3
+    )
+    if evidence_backed_incremental and score < 35:
+        score = 35
+        reasons.append("evidence_backed_incremental_review_floor")
+
     if score >= 75:
         relationship_class = "strong"
         recommended_use = "Primary source: monitor and use actively"
