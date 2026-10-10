@@ -6,7 +6,8 @@ Run-scoped hard-gate dedupe for newly harvested Remote source candidates.
 
 Inputs
 ------
-- <run>/harvest/instagram/candidate_source_evidence.jsonl
+- <run>/harvest/instagram/candidate_source_evidence[_v2].jsonl (when present)
+- <run>/harvest/generic/candidate_source_evidence.jsonl (when present)
 - historical/root-level data/remote/*.jsonl classification/evidence artifacts
 
 Outputs
@@ -143,21 +144,35 @@ def main() -> int:
 
     run_dir = args.run_dir.resolve() if args.run_dir else latest_run_dir(root)
     evidence_v2 = run_dir / "harvest" / "instagram" / "candidate_source_evidence_v2.jsonl"
-    evidence_path = (
+    instagram_evidence = (
         evidence_v2
         if evidence_v2.exists()
         else run_dir / "harvest" / "instagram" / "candidate_source_evidence.jsonl"
     )
+    generic_evidence = run_dir / "harvest" / "generic" / "candidate_source_evidence.jsonl"
+    generic_unresolved = run_dir / "harvest" / "generic" / "needs_resolution.jsonl"
 
-    if not evidence_path.exists():
-        raise RuntimeError(f"Candidate evidence not found: {evidence_path}")
+    evidence_inputs = [p for p in (instagram_evidence, generic_evidence) if p.exists()]
+    rows: list[dict[str, Any]] = []
+    for evidence_path in evidence_inputs:
+        source_platform = "generic_web" if evidence_path == generic_evidence else "instagram"
+        rows.extend({**row, "_evidence_platform": row.get("source_platform") or source_platform}
+                    for row in load_jsonl(evidence_path))
 
-    rows = load_jsonl(evidence_path)
     known = build_known_universe(remote_root)
 
     # Consolidate duplicate candidate hosts within the current run first.
     current: dict[str, dict[str, Any]] = {}
-    resolution_rows: list[dict[str, Any]] = []
+    resolution_rows: list[dict[str, Any]] = [
+        {
+            **row,
+            "dedupe_status": "needs_resolution",
+            "dedupe_reason": row.get("dedupe_reason")
+            or row.get("resolution_reason")
+            or "generic_candidate_needs_resolution",
+        }
+        for row in load_jsonl(generic_unresolved)
+    ]
 
     for row in rows:
         host = host_from_value(row.get("candidate_domain") or row.get("candidate_url"))
@@ -178,11 +193,15 @@ def main() -> int:
         })
         item["evidence_count"] += 1
         item["evidence"].append({
+            "platform": row.get("_evidence_platform") or row.get("source_platform"),
             "post_id": row.get("post_id"),
             "instagram_url": row.get("instagram_url"),
+            "source_url": row.get("source_url"),
+            "source_message_uid": row.get("source_message_uid"),
             "evidence_type": row.get("evidence_type"),
             "confidence": row.get("confidence"),
             "ocr_observed": row.get("ocr_observed"),
+            "observations": row.get("observations"),
         })
 
     new_rows: list[dict[str, Any]] = []
@@ -205,7 +224,7 @@ def main() -> int:
                 "dedupe_status": "new_candidate",
                 # remote_source_validator.py consumes these historical field names.
                 "prevalidation_score": None,
-                "prevalidation_reason": "incremental_social_discovery",
+                "prevalidation_reason": "incremental_remote_discovery",
                 "email_evidence_count": item["evidence_count"],
                 "evidence_url_count": item["evidence_count"],
                 "discovery_resolution_evidence_count": item["evidence_count"],
@@ -223,6 +242,7 @@ def main() -> int:
 
     manifest = {
         "status": "ok",
+        "evidence_inputs": [str(p) for p in evidence_inputs],
         "input_evidence_rows": len(rows),
         "unique_resolved_candidate_hosts": len(current),
         "already_known_hosts": len(known_rows),
@@ -242,7 +262,12 @@ def main() -> int:
     print("REMOTE INCREMENTAL CANDIDATE DEDUPE OK")
     print("=" * 58)
     print(f"Run directory:                  {run_dir}")
-    print(f"Evidence input:                 {evidence_path}")
+    print("Evidence inputs:")
+    if evidence_inputs:
+        for evidence_path in evidence_inputs:
+            print(f"  {evidence_path}")
+    else:
+        print("  [NONE]")
     print(f"Input evidence rows:            {len(rows)}")
     print(f"Unique candidate hosts:         {len(current)}")
     print(f"Already known hosts:            {len(known_rows)}")
