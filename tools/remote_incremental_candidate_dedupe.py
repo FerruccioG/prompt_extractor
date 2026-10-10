@@ -197,7 +197,12 @@ def main() -> int:
     args = parser.parse_args()
 
     run_dir = args.run_dir.resolve() if args.run_dir else latest_run_dir(root)
-    evidence_path = run_dir / "harvest" / "instagram" / "candidate_source_evidence.jsonl"
+    evidence_v2 = run_dir / "harvest" / "instagram" / "candidate_source_evidence_v2.jsonl"
+    evidence_path = (
+        evidence_v2
+        if evidence_v2.exists()
+        else run_dir / "harvest" / "instagram" / "candidate_source_evidence.jsonl"
+    )
 
     if not evidence_path.exists():
         raise RuntimeError(f"Candidate evidence not found: {evidence_path}")
@@ -292,6 +297,7 @@ def main() -> int:
     print("REMOTE INCREMENTAL CANDIDATE DEDUPE OK")
     print("=" * 58)
     print(f"Run directory:                  {run_dir}")
+    print(f"Evidence input:                 {evidence_path}")
     print(f"Input evidence rows:            {len(rows)}")
     print(f"Unique candidate hosts:         {len(current)}")
     print(f"Already known hosts:            {len(known_rows)}")
