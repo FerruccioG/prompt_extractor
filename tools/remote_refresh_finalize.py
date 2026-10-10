@@ -311,7 +311,6 @@ def main() -> int:
 
         state["last_successful_run_utc"] = utc_now_iso()
         state["successful_run_count"] = int(state.get("successful_run_count", 0) or 0) + 1
-        write_json_atomic(STATE_PATH, state)
         final_manifest = {
             "status": "success_noop_no_new_email",
             "run_dir": str(run_dir),
@@ -326,6 +325,12 @@ def main() -> int:
         }
         final_path = run_dir / "finalization_manifest.json"
         write_json_atomic(final_path, final_manifest)
+        try:
+            # State is the final durable commit for a successful refresh.
+            write_json_atomic(STATE_PATH, state)
+        except Exception:
+            final_path.unlink(missing_ok=True)
+            raise
         print("No new Remote emails — successful no-op.")
         print(f"Golden rows:                   {before_count}")
         print("Excel was NOT modified.")
@@ -493,14 +498,6 @@ def main() -> int:
     state["last_successful_run_utc"] = utc_now_iso()
     state["successful_run_count"] = int(state.get("successful_run_count", 0) or 0) + 1
 
-    try:
-        write_json_atomic(STATE_PATH, state)
-    except Exception:
-        if excel_written:
-            restore_file(workbook_backup, workbook)
-            restore_file(golden_backup, golden_input)
-        raise
-
     after_count = golden_count(golden_input)
     final_manifest = {
         "status": "success",
@@ -521,6 +518,16 @@ def main() -> int:
     }
     final_path = run_dir / "finalization_manifest.json"
     write_json_atomic(final_path, final_manifest)
+
+    try:
+        # State/watermark is deliberately the final durable commit.
+        write_json_atomic(STATE_PATH, state)
+    except Exception:
+        final_path.unlink(missing_ok=True)
+        if excel_written:
+            restore_file(workbook_backup, workbook)
+            restore_file(golden_backup, golden_input)
+        raise
 
     print()
     print("FINALIZATION COMPLETE")
