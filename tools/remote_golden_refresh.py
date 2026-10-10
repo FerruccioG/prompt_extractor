@@ -22,6 +22,7 @@ import imaplib
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import UTC, datetime
 from email.utils import parseaddr, parsedate_to_datetime
@@ -491,13 +492,302 @@ def ingest_new_remote_emails(state: dict, run_started: datetime, run_dir: Path) 
     return result
 
 
+
+def load_json(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        value = json.load(handle)
+    if not isinstance(value, dict):
+        raise RuntimeError(f"Expected JSON object: {path}")
+    return value
+
+
+def write_json_atomic(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(value, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+def jsonl_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    with path.open("r", encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())
+
+
+def run_stage(label: str, script_name: str, run_dir: Path, manifest_path: Path) -> None:
+    """Run one existing run-scoped task and record it in the run manifest."""
+    script = ROOT_DIR / "tools" / script_name
+    if not script.exists():
+        raise RuntimeError(f"Required stage script not found: {script}")
+
+    manifest = load_json(manifest_path)
+    stages = manifest.setdefault("pipeline_stages", [])
+    started = utc_now_iso()
+
+    print()
+    print("=" * 72)
+    print(f"STAGE: {label}")
+    print(f"Script: {script.relative_to(ROOT_DIR)}")
+    print("=" * 72)
+
+    result = subprocess.run(
+        [sys.executable, "-u", str(script), "--run-dir", str(run_dir)],
+        cwd=str(ROOT_DIR),
+        check=False,
+    )
+
+    stages.append({
+        "label": label,
+        "script": str(script.relative_to(ROOT_DIR)),
+        "started_utc": started,
+        "finished_utc": utc_now_iso(),
+        "return_code": result.returncode,
+        "status": "ok" if result.returncode == 0 else "failed",
+    })
+
+    if result.returncode != 0:
+        manifest["status"] = "pipeline_failed"
+        manifest["failed_stage"] = label
+        manifest["commit_eligible"] = False
+        manifest.setdefault("blocking_errors", []).append(f"stage_failed:{label}")
+        write_json_atomic(manifest_path, manifest)
+        raise RuntimeError(
+            f"Stage failed: {label} ({script.name}) rc={result.returncode}"
+        )
+
+    manifest["status"] = "pipeline_running"
+    write_json_atomic(manifest_path, manifest)
+
+
+def run_general_scoring_if_needed(run_dir: Path, manifest_path: Path) -> None:
+    queue = run_dir / "dedupe" / "new_source_validation_queue.jsonl"
+    if jsonl_count(queue) == 0:
+        print("GENERAL VALIDATION: no genuinely new candidate sources.")
+        return
+
+    run_stage(
+        "general source validation",
+        "remote_incremental_source_validator.py",
+        run_dir,
+        manifest_path,
+    )
+    run_stage(
+        "general semantic validation assessment",
+        "remote_incremental_validation_assessor.py",
+        run_dir,
+        manifest_path,
+    )
+
+    eligible = run_dir / "validation" / "eligible_new_sources.jsonl"
+    if jsonl_count(eligible) == 0:
+        print("GENERAL SCORING: no semantically eligible new sources.")
+        return
+
+    run_stage(
+        "general relationship scoring",
+        "remote_incremental_relationship_scorer.py",
+        run_dir,
+        manifest_path,
+    )
+    run_stage(
+        "general candidate-source profiling",
+        "remote_incremental_candidate_profiler.py",
+        run_dir,
+        manifest_path,
+    )
+    run_stage(
+        "general final candidate-source scoring",
+        "remote_incremental_final_scorer.py",
+        run_dir,
+        manifest_path,
+    )
+
+
+def run_instagram_and_generic(run_dir: Path, manifest_path: Path) -> None:
+    instagram_queue = run_dir / "harvest" / "instagram_queue.jsonl"
+    generic_queue = run_dir / "harvest" / "unclassified_queue.jsonl"
+
+    if jsonl_count(instagram_queue):
+        run_stage("Instagram harvest", "remote_instagram_harvester.py", run_dir, manifest_path)
+        run_stage("Instagram OCR", "remote_instagram_ocr.py", run_dir, manifest_path)
+        run_stage(
+            "Instagram evidence extraction",
+            "remote_instagram_evidence_builder.py",
+            run_dir,
+            manifest_path,
+        )
+
+        deeper = run_dir / "harvest" / "instagram" / "needs_deeper_harvest.jsonl"
+        if jsonl_count(deeper):
+            run_stage(
+                "Instagram reel frame harvest",
+                "remote_instagram_reel_frame_harvester.py",
+                run_dir,
+                manifest_path,
+            )
+            run_stage(
+                "Instagram reel frame OCR",
+                "remote_instagram_reel_frame_ocr.py",
+                run_dir,
+                manifest_path,
+            )
+            # Rebuild evidence with deep-frame OCR now available.
+            run_stage(
+                "Instagram evidence rebuild after deep reel OCR",
+                "remote_instagram_evidence_builder.py",
+                run_dir,
+                manifest_path,
+            )
+
+        run_stage(
+            "Instagram candidate-name resolution",
+            "remote_instagram_name_resolver.py",
+            run_dir,
+            manifest_path,
+        )
+
+    if jsonl_count(generic_queue):
+        run_stage(
+            "generic web harvest",
+            "remote_generic_web_harvester.py",
+            run_dir,
+            manifest_path,
+        )
+
+    if jsonl_count(instagram_queue) or jsonl_count(generic_queue):
+        run_stage(
+            "general hard dedupe",
+            "remote_incremental_candidate_dedupe.py",
+            run_dir,
+            manifest_path,
+        )
+        run_general_scoring_if_needed(run_dir, manifest_path)
+
+
+def run_tiktok(run_dir: Path, manifest_path: Path) -> None:
+    queue = run_dir / "harvest" / "tiktok_queue.jsonl"
+    if jsonl_count(queue) == 0:
+        return
+
+    for label, script in (
+        ("TikTok harvest", "remote_tiktok_harvester.py"),
+        ("TikTok OCR", "remote_tiktok_ocr.py"),
+        ("TikTok evidence extraction", "remote_tiktok_evidence_builder.py"),
+        ("TikTok hard dedupe", "remote_tiktok_candidate_dedupe.py"),
+    ):
+        run_stage(label, script, run_dir, manifest_path)
+
+    new_queue = (
+        run_dir / "harvest" / "tiktok" / "dedupe" / "new_source_validation_queue.jsonl"
+    )
+    if jsonl_count(new_queue) == 0:
+        print("TIKTOK VALIDATION: no genuinely new candidate sources.")
+        return
+
+    run_stage("TikTok source validation", "remote_tiktok_source_validator.py", run_dir, manifest_path)
+    run_stage(
+        "TikTok semantic validation assessment",
+        "remote_tiktok_validation_assessor.py",
+        run_dir,
+        manifest_path,
+    )
+
+    eligible = run_dir / "harvest" / "tiktok" / "validation" / "eligible_new_sources.jsonl"
+    if jsonl_count(eligible) == 0:
+        print("TIKTOK SCORING: no semantically eligible new sources.")
+        return
+
+    for label, script in (
+        ("TikTok relationship scoring", "remote_tiktok_relationship_scorer.py"),
+        ("TikTok candidate-source profiling", "remote_tiktok_candidate_profiler.py"),
+        ("TikTok final candidate-source scoring", "remote_tiktok_final_scorer.py"),
+    ):
+        run_stage(label, script, run_dir, manifest_path)
+
+
+def run_linkedin(run_dir: Path, manifest_path: Path) -> None:
+    queue = run_dir / "harvest" / "linkedin_queue.jsonl"
+    if jsonl_count(queue) == 0:
+        return
+
+    for label, script in (
+        ("LinkedIn harvest", "remote_linkedin_harvester.py"),
+        ("LinkedIn OCR", "remote_linkedin_ocr.py"),
+        ("LinkedIn evidence extraction", "remote_linkedin_evidence_builder.py"),
+        ("LinkedIn name resolution", "remote_linkedin_name_resolver.py"),
+        ("LinkedIn community resolution", "remote_linkedin_community_resolver.py"),
+        ("LinkedIn hard dedupe", "remote_linkedin_candidate_dedupe.py"),
+    ):
+        run_stage(label, script, run_dir, manifest_path)
+
+    new_queue = (
+        run_dir / "harvest" / "linkedin" / "dedupe" / "new_source_validation_queue.jsonl"
+    )
+    if jsonl_count(new_queue) == 0:
+        print("LINKEDIN VALIDATION: no genuinely new candidate sources.")
+        return
+
+    run_stage(
+        "LinkedIn source validation",
+        "remote_linkedin_source_validator.py",
+        run_dir,
+        manifest_path,
+    )
+    run_stage(
+        "LinkedIn semantic validation assessment",
+        "remote_linkedin_validation_assessor.py",
+        run_dir,
+        manifest_path,
+    )
+
+    eligible = run_dir / "harvest" / "linkedin" / "validation" / "eligible_new_sources.jsonl"
+    if jsonl_count(eligible) == 0:
+        print("LINKEDIN SCORING: no semantically eligible new sources.")
+        return
+
+    for label, script in (
+        ("LinkedIn relationship scoring", "remote_linkedin_relationship_scorer.py"),
+        ("LinkedIn candidate-source profiling", "remote_linkedin_candidate_profiler.py"),
+        ("LinkedIn final candidate-source scoring", "remote_linkedin_final_scorer.py"),
+    ):
+        run_stage(label, script, run_dir, manifest_path)
+
+
+def print_final_summary(run_dir: Path) -> None:
+    reconciliation_path = run_dir / "reconciliation" / "reconciliation_manifest.json"
+    finalization_path = run_dir / "finalization_manifest.json"
+
+    reconciliation = load_json(reconciliation_path) if reconciliation_path.exists() else {}
+    finalization = load_json(finalization_path) if finalization_path.exists() else {}
+
+    print()
+    print("=" * 72)
+    print("REMOTE GOLDEN REFRESH COMPLETE")
+    print("=" * 72)
+    print(f"Run directory:                {run_dir}")
+    print(f"Promote:                      {reconciliation.get('promote', 0)}")
+    print(f"Hold / Review:                {reconciliation.get('hold_review', 0)}")
+    print(f"Exclude:                      {reconciliation.get('exclude', 0)}")
+    print(f"Check Later:                  {reconciliation.get('check_later', 0)}")
+    print(f"Unresolved preserved:         {reconciliation.get('unresolved', 0)}")
+    print(f"Golden before:                {finalization.get('golden_before', 'n/a')}")
+    print(f"Golden after:                 {finalization.get('golden_after', 'n/a')}")
+    print(f"Excel written:                {finalization.get('excel_written', False)}")
+    print(f"Excel integrity:              {'PASS' if finalization.get('excel_integrity_passed') else 'n/a'}")
+    print(f"Watermark advanced:           {finalization.get('watermark_advanced', False)}")
+
+
 def main() -> int:
     state = load_state()
     run_started = utc_now()
     run_dir = create_run_dir(run_started)
 
     print("Remote Job Opportunities Golden Master List Refresh")
-    print("=" * 58)
+    print("=" * 72)
     print(f"State file:                {STATE_PATH}")
     print(f"Run directory:             {run_dir}")
     print(f"Historical cutoff:         {state['historical_cutoff_local_date']} (frozen)")
@@ -528,12 +818,11 @@ def main() -> int:
         "blocking_errors": intake.get("blocking_errors", []),
         "commit_eligible": bool(intake.get("commit_eligible")),
         "watermark_advanced": False,
+        "pipeline_stages": [],
     }
 
     manifest_path = run_dir / "run_manifest.json"
-    with manifest_path.open("w", encoding="utf-8") as handle:
-        json.dump(manifest, handle, indent=2, ensure_ascii=False)
-        handle.write("\n")
+    write_json_atomic(manifest_path, manifest)
 
     print("GMAIL INTAKE + URL CLASSIFICATION OK")
     print(f"Matched by Gmail query:     {intake['matched_uids']}")
@@ -546,35 +835,62 @@ def main() -> int:
     print(f"Noise URLs:                 {intake['noise_urls']}")
     print(f"Fetch errors:               {intake['emails_with_fetch_errors']}")
     print(f"Candidate newest UID:       {intake['candidate_newest_message_uid'] or 'none'}")
-    print(f"Email audit:                {intake['email_audit_path']}")
-    print(f"Raw URL queue:              {intake['url_queue_path']}")
-    print(f"Actionable URL queue:       {intake['actionable_url_queue_path']}")
-    print(f"Context URL queue:          {intake['context_url_queue_path']}")
-    print(f"Noise URL queue:            {intake['noise_url_queue_path']}")
-    print(f"Run manifest:               {manifest_path}")
     print()
+
     if intake["emails_with_fetch_errors"]:
         print("INTAKE INCOMPLETE: one or more emails could not be fetched.")
         print("This run is NOT eligible for commit or watermark advancement.")
-        print("The failed UID(s) remain visible in email_audit.jsonl for retry.")
-        print("Excel was NOT touched.")
-        print("Watermark was NOT advanced.")
         return 2
 
-    if intake["no_new_email_noop"]:
-        print("INTAKE COMPLETE: no new Remote emails were found.")
-        print("This is a valid no-op run; downstream finalization may close it safely.")
-    else:
-        print("INTAKE COMPLETE")
-        print("Raw email text and raw URLs were preserved.")
-        print("The run is eligible for downstream harvesting and decision stages.")
+    try:
+        if intake["no_new_email_noop"]:
+            run_stage(
+                "no-new-email finalization",
+                "remote_refresh_finalize.py",
+                run_dir,
+                manifest_path,
+            )
+            print_final_summary(run_dir)
+            return 0
 
-    print("No social/web content was harvested by this intake stage.")
-    print("No source was validated or scored by this intake stage.")
-    print("Excel was NOT touched.")
-    print("Watermark was NOT advanced.")
+        run_stage("harvest routing", "remote_harvest_router.py", run_dir, manifest_path)
+        run_instagram_and_generic(run_dir, manifest_path)
+        run_tiktok(run_dir, manifest_path)
+        run_linkedin(run_dir, manifest_path)
 
-    return 0
+        run_stage(
+            "whole-run reconciliation",
+            "remote_refresh_reconcile.py",
+            run_dir,
+            manifest_path,
+        )
+
+        manifest = load_json(manifest_path)
+        manifest["status"] = "reconciliation_ok"
+        write_json_atomic(manifest_path, manifest)
+
+        run_stage(
+            "publication and finalization",
+            "remote_refresh_finalize.py",
+            run_dir,
+            manifest_path,
+        )
+
+        manifest = load_json(manifest_path)
+        manifest["status"] = "success"
+        manifest["watermark_advanced"] = bool(
+            load_json(run_dir / "finalization_manifest.json").get("watermark_advanced")
+        )
+        write_json_atomic(manifest_path, manifest)
+
+        print_final_summary(run_dir)
+        return 0
+
+    except Exception as exc:
+        print()
+        print(f"REMOTE GOLDEN REFRESH FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print("Watermark was NOT advanced unless finalization had already completed.")
+        return 1
 
 
 if __name__ == "__main__":
