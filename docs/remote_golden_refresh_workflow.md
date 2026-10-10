@@ -2,7 +2,7 @@
 
 Primary entry point: `tools/remote_golden_refresh.py`
 
-## Current status after corrective safety pass
+## Current status
 
 The intake/checkpoint foundation is hardened before the final orchestration work:
 
@@ -17,7 +17,7 @@ The intake/checkpoint foundation is hardened before the final orchestration work
 - Regional domains remain distinct (`example.com`, `example.ie`, `example.co.uk`) unless live redirect evidence proves equivalence.
 - `remote_refresh_finalize.py` accepts `--run-dir` so the future orchestrator can pass the exact active run rather than depend on "latest directory" discovery.
 
-`remote_golden_refresh.py` is still the intake-stage entry point today. The next development phase wires the existing downstream tasks into this one command.
+`remote_golden_refresh.py` is now the one-command orchestrator. It runs intake, harvesting, candidate extraction, dedupe, validation, profiling/scoring, whole-run reconciliation, and publication/finalization using the existing run-scoped components.
 
 ## Target one-command workflow
 
@@ -38,7 +38,8 @@ remote_golden_refresh.py
     |       +-- Instagram queue
     |       +-- TikTok queue
     |       +-- LinkedIn queue
-    |       `-- Generic/unclassified queue (generic harvester still to complete)
+    |       `-- Generic/unclassified queue
+    |             `tools/remote_generic_web_harvester.py`
     |
     +-- 4A. Instagram harvest/extraction
     |       `tools/remote_instagram_harvester.py`
@@ -60,8 +61,9 @@ remote_golden_refresh.py
     |       `tools/remote_linkedin_ocr.py`
     |       `tools/remote_linkedin_evidence_builder.py`
     |       `tools/remote_linkedin_name_resolver.py`
+    |       `tools/remote_linkedin_candidate_dedupe.py` (preliminary)
     |       `tools/remote_linkedin_community_resolver.py`
-    |       `tools/remote_linkedin_candidate_dedupe.py`
+    |       `tools/remote_linkedin_candidate_dedupe.py` (final)
     |
     +-- 5. Validate genuinely new candidate sources only
     |       Generic/Instagram:
@@ -99,11 +101,12 @@ remote_golden_refresh.py
     |       Promote = 0:
     |         `tools/remote_refresh_finalize.py --run-dir <exact-run>`
     |
-    |       Promote > 0 (next implementation gap):
-    |         merge promoted rows into Golden JSONL
-    |         backup Excel
+    |       Promote > 0:
+    |         merge promoted rows into Golden JSONL candidate
+    |         backup Excel + Golden JSONL
     |         `tools/storage/excel_source_loader.py`
     |         `tools/storage/excel_source_integrity_validator.py`
+    |         commit Golden JSONL only after integrity PASS
     |         persist dispositions
     |         advance Gmail UID checkpoint LAST
     |
@@ -122,3 +125,13 @@ remote_golden_refresh.py
 8. Excel is written only for actual Golden promotions.
 9. Excel integrity must pass before state is committed.
 10. State/watermark is always the final commit step.
+
+
+## Implemented completion notes
+
+- Generic/unclassified URLs now have a conservative web harvester with HTTP extraction, redirect capture, browser fallback, full-page screenshot, and OCR fallback when direct HTML does not expose candidate domains.
+- Generic and Instagram candidate evidence converge into the same general hard-dedupe/validation/scoring branch.
+- LinkedIn community resolution intentionally runs after a preliminary dedupe because it consumes the dedupe unresolved artifact, then the LinkedIn dedupe runs again on the enriched evidence.
+- Golden promotion finalization is transactional: prepare merged Golden records, back up workbook and Golden JSONL, load Excel, run integrity validation, then commit Golden JSONL and finally the Gmail UID/state.
+- Newly appended Excel rows copy the previous Source Directory row's formatting so manual Format Painter repair is no longer required.
+- Excel matching uses URL/host as the durable identity when available; identical brand names on different regional domains are not collapsed by source-name fallback.
