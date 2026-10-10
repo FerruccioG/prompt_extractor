@@ -285,7 +285,10 @@ def match_existing_row(
             row = index.get(f"host::{host}")
             if row:
                 return row
-    if source:
+    # Source-name fallback is safe only when the incoming record has no URL.
+    # When a URL/host exists it is the durable source identity: the same brand
+    # may legitimately have distinct .com/.ie/.co.uk regional sources.
+    if source and not url:
         return index.get(f"source::{source}")
     return None
 
