@@ -563,6 +563,55 @@ def run_stage(label: str, script_name: str, run_dir: Path, manifest_path: Path) 
     write_json_atomic(manifest_path, manifest)
 
 
+
+def run_terminal_finalizer(run_dir: Path, manifest_path: Path) -> None:
+    """
+    Run finalization without any successful-path writes afterward.
+
+    The finalizer commits the refresh state/watermark last. Therefore this
+    orchestrator records the stage start before invoking it and, on success,
+    performs no further filesystem mutation.
+    """
+    script = ROOT_DIR / "tools" / "remote_refresh_finalize.py"
+    manifest = load_json(manifest_path)
+    stages = manifest.setdefault("pipeline_stages", [])
+    stages.append({
+        "label": "publication and finalization",
+        "script": str(script.relative_to(ROOT_DIR)),
+        "started_utc": utc_now_iso(),
+        "return_code": None,
+        "status": "started_terminal_stage",
+    })
+    manifest["status"] = "finalization_started"
+    write_json_atomic(manifest_path, manifest)
+
+    print()
+    print("=" * 72)
+    print("STAGE: publication and finalization")
+    print(f"Script: {script.relative_to(ROOT_DIR)}")
+    print("=" * 72)
+
+    result = subprocess.run(
+        [sys.executable, "-u", str(script), "--run-dir", str(run_dir)],
+        cwd=str(ROOT_DIR),
+        check=False,
+    )
+    if result.returncode != 0:
+        # Finalizer guarantees that a failed return does not advance state, so
+        # recording the failure here is safe.
+        manifest = load_json(manifest_path)
+        manifest["status"] = "pipeline_failed"
+        manifest["failed_stage"] = "publication and finalization"
+        manifest["commit_eligible"] = False
+        manifest.setdefault("blocking_errors", []).append(
+            "stage_failed:publication and finalization"
+        )
+        write_json_atomic(manifest_path, manifest)
+        raise RuntimeError(
+            f"Finalization failed rc={result.returncode}"
+        )
+
+
 def run_general_scoring_if_needed(run_dir: Path, manifest_path: Path) -> None:
     queue = run_dir / "dedupe" / "new_source_validation_queue.jsonl"
     if jsonl_count(queue) == 0:
@@ -844,12 +893,7 @@ def main() -> int:
 
     try:
         if intake["no_new_email_noop"]:
-            run_stage(
-                "no-new-email finalization",
-                "remote_refresh_finalize.py",
-                run_dir,
-                manifest_path,
-            )
+            run_terminal_finalizer(run_dir, manifest_path)
             print_final_summary(run_dir)
             return 0
 
@@ -869,20 +913,10 @@ def main() -> int:
         manifest["status"] = "reconciliation_ok"
         write_json_atomic(manifest_path, manifest)
 
-        run_stage(
-            "publication and finalization",
-            "remote_refresh_finalize.py",
-            run_dir,
-            manifest_path,
-        )
+        run_terminal_finalizer(run_dir, manifest_path)
 
-        manifest = load_json(manifest_path)
-        manifest["status"] = "success"
-        manifest["watermark_advanced"] = bool(
-            load_json(run_dir / "finalization_manifest.json").get("watermark_advanced")
-        )
-        write_json_atomic(manifest_path, manifest)
-
+        # Do not write anything after successful finalization: the state/UID
+        # checkpoint committed by the finalizer must remain the last durable write.
         print_final_summary(run_dir)
         return 0
 
