@@ -273,10 +273,27 @@ def main() -> int:
 
     run_dir = args.run_dir.resolve() if args.run_dir else latest_run_dir()
     run_manifest_path = run_dir / "run_manifest.json"
+    final_path = run_dir / "finalization_manifest.json"
     if not run_manifest_path.exists():
         raise RuntimeError(f"Run manifest not found: {run_manifest_path}")
     if not STATE_PATH.exists():
         raise RuntimeError(f"Refresh state not found: {STATE_PATH}")
+
+    # Idempotency guard: a successfully finalized run must never publish twice
+    # or increment successful_run_count twice if an operator reruns this exact
+    # run directory manually.
+    if final_path.exists():
+        prior_final = load_json(final_path)
+        if str(prior_final.get("status") or "").startswith("success"):
+            print("REMOTE REFRESH ALREADY FINALIZED")
+            print("=" * 64)
+            print(f"Run directory:                 {run_dir}")
+            print(f"Finalization status:           {prior_final.get('status')}")
+            print(f"Golden after:                  {prior_final.get('golden_after')}")
+            print(f"Excel written:                 {prior_final.get('excel_written')}")
+            print(f"Watermark advanced:            {prior_final.get('watermark_advanced')}")
+            print("No files were modified.")
+            return 0
 
     run_manifest = load_json(run_manifest_path)
     state = load_json(STATE_PATH)
@@ -323,7 +340,6 @@ def main() -> int:
             "state_after": state,
             "finalized_at_utc": utc_now_iso(),
         }
-        final_path = run_dir / "finalization_manifest.json"
         write_json_atomic(final_path, final_manifest)
         try:
             # State is the final durable commit for a successful refresh.
@@ -516,7 +532,6 @@ def main() -> int:
         "state_after": state,
         "finalized_at_utc": utc_now_iso(),
     }
-    final_path = run_dir / "finalization_manifest.json"
     write_json_atomic(final_path, final_manifest)
 
     try:
