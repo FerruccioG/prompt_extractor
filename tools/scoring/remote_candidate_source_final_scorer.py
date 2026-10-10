@@ -101,6 +101,7 @@ EMPLOYER_CAREERS = {
 COMMUNITIES_OR_ADVICE = {
     "growremote.ie", "job-hunt.org", "linkedintalentconnect.com",
     "productcollective.com", "hbswk.hbs.edu", "platformengineering.org",
+    "remoteworkersworldwide.co",
 }
 CONTENT_OR_LOW_DIRECTNESS = {
     "timesofindia.indiatimes.com", "blog.yelp.com", "gartner.com",
