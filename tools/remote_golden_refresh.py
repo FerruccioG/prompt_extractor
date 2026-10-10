@@ -768,8 +768,9 @@ def run_linkedin(run_dir: Path, manifest_path: Path) -> None:
         ("LinkedIn OCR", "remote_linkedin_ocr.py"),
         ("LinkedIn evidence extraction", "remote_linkedin_evidence_builder.py"),
         ("LinkedIn name resolution", "remote_linkedin_name_resolver.py"),
+        ("LinkedIn preliminary hard dedupe", "remote_linkedin_candidate_dedupe.py"),
         ("LinkedIn community resolution", "remote_linkedin_community_resolver.py"),
-        ("LinkedIn hard dedupe", "remote_linkedin_candidate_dedupe.py"),
+        ("LinkedIn final hard dedupe", "remote_linkedin_candidate_dedupe.py"),
     ):
         run_stage(label, script, run_dir, manifest_path)
 
